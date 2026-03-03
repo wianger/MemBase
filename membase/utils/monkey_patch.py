@@ -73,8 +73,8 @@ class MonkeyPatcher:
 
         Example::
 
-            from memories.utils import (
-                MonkeyPatcher, 
+            from membase.utils import (
+                MonkeyPatcher,
                 make_attr_patch,
                 PatchSpec,
             )

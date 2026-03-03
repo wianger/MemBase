@@ -84,7 +84,7 @@ class MemOSConfig(MemBaseConfig):
     )
     reranker_config: RerankerConfigFactory | None = Field(
         default=None, 
-        description="The configuration for the embedding model.",
+        description="The configuration for the reranker model.",
         examples=[
             {
                 "backend": "cosine_local",

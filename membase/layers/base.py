@@ -65,7 +65,7 @@ class MemBaseLayer(ABC):
         
         Subclasses should override this method to implement their own retrieval logic,
         support additional retrieval parameters, and define how each memory entry is 
-        formatted into for downstream tasks.
+        formatted for downstream tasks.
 
         Args:
             query (`str`): 
