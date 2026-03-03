@@ -10,7 +10,7 @@ You can replace A-MEM with any other supported memory layer by swapping the conf
 
 Download the LongMemEval dataset from HuggingFace:
 
-> https://huggingface.co/datasets/xiaowu0162/longmemeval
+> https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned
 
 Save it to a local path, e.g., `/path/to/longmemeval.json`.
 
