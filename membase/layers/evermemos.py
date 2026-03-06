@@ -72,7 +72,7 @@ class EverMemOSLayer(MemBaseLayer):
                     "summary": doc.get("summary", ""),
                     "score": float(score), 
                 },
-                used_content=doc_text,
+                formatted_content=doc_text,
             )
             outputs.append(memory_entry)
         return outputs
