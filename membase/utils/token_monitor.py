@@ -6,12 +6,12 @@ from threading import RLock, Lock
 from litellm import token_counter as litellm_token_counter
 from litellm.types.utils import SelectTokenizerResponse
 from litellm import encoding
-import tiktoken 
+import tiktoken
 from tokenizers import Tokenizer
 from datetime import datetime
 import inspect
 from typing import (
-    Any, 
+    Any,
     ClassVar,
     Callable,
 )
@@ -21,19 +21,19 @@ def get_tokenizer_for_model(model: str) -> SelectTokenizerResponse:
     """Get the tokenizer for a model.
     
     Args:
-        model (`str`): 
+        model (`str`):
             The model name.
     
     Returns:
-        `SelectTokenizerResponse`: 
+        `SelectTokenizerResponse`:
             The litellm tokenizer for the model.
     """
-    try: 
+    try:
         tokenizer = Tokenizer.from_pretrained(model)
         return SelectTokenizerResponse(
-            type="huggingface_tokenizer", 
+            type="huggingface_tokenizer",
             tokenizer=tokenizer,
-        ) 
+        )
     except Exception:
         print(
             f"Native huggingface tokenizer for {model} cannot be loaded. "
@@ -44,7 +44,7 @@ def get_tokenizer_for_model(model: str) -> SelectTokenizerResponse:
             tokenizer = tiktoken.encoding_for_model(model)
         except KeyError:
             print(
-                f"Tiktoken tokenizer for {model} cannot be loaded. " 
+                f"Tiktoken tokenizer for {model} cannot be loaded. "
                 "Load litellm's default tokenizer instead."
             )
             tokenizer = encoding
@@ -54,17 +54,17 @@ def get_tokenizer_for_model(model: str) -> SelectTokenizerResponse:
         )
 
 
-class CostState: 
+class CostState:
     """Cost state for a specific LLM model.
     
     It is used to track the cost of LLM API calls and provide statistics.
     """
 
     def __init__(
-        self, 
+        self,
         input_tokens: int = 0,
         output_tokens: int = 0,
-        total_time: float = 0.0, 
+        total_time: float = 0.0,
         window_size: int = 100_000,
         total_count: int = 0,
         histories: list[dict[str, list[dict[str, str]] | str | float | int]] | None = None,
@@ -72,17 +72,17 @@ class CostState:
         """Initialize the cost state.
         
         Args:
-            input_tokens (`int`, defaults to `0`): 
+            input_tokens (`int`, defaults to `0`):
                 The cumulative number of input tokens.
-            output_tokens (`int`, defaults to `0`): 
+            output_tokens (`int`, defaults to `0`):
                 The cumulative number of output tokens.
-            total_time (`float`, defaults to `0.0`): 
+            total_time (`float`, defaults to `0.0`):
                 The cumulative time.
-            window_size (`int`, defaults to `100_000`): 
+            window_size (`int`, defaults to `100_000`):
                 The window size. It represents the number of calls to be stored in the history.
-            total_count (`int`, defaults to `0`): 
+            total_count (`int`, defaults to `0`):
                 The cumulative number of calls.
-            histories (`list[dict[str, list[dict[str, str]] | str | float | int]]`, optional): 
+            histories (`list[dict[str, list[dict[str, str]] | str | float | int]]`, optional):
                 The histories of the calls.
         """
         self.input_tokens = input_tokens
@@ -90,18 +90,18 @@ class CostState:
         self.total_time = total_time
         self.total_count = total_count
         self.histories = (
-            deque(maxlen=window_size) 
-            if histories is None else 
+            deque(maxlen=window_size)
+            if histories is None else
             deque(histories, maxlen=window_size)
         )
-        self._lock = RLock() 
+        self._lock = RLock()
 
-    @property 
+    @property
     def total_tokens(self) -> int:
         """Compute the total number of tokens.
         
         Returns:
-            `int`: 
+            `int`:
                 The total number of tokens.
         """
         with self._lock:
@@ -112,7 +112,7 @@ class CostState:
         """Compute the average number of input tokens per call.
         
         Returns:
-            `float`: 
+            `float`:
                 The average number of input tokens per call.
         """
         with self._lock:
@@ -123,7 +123,7 @@ class CostState:
         """Compute the average number of output tokens per call.
         
         Returns:
-            `float`: 
+            `float`:
                 The average number of output tokens per call.
         """
         with self._lock:
@@ -134,7 +134,7 @@ class CostState:
         """Compute the average number of tokens per call.
         
         Returns:
-            `float`: 
+            `float`:
                 The average number of tokens per call.
         """
         with self._lock:
@@ -145,7 +145,7 @@ class CostState:
         """Compute the average time per call.
         
         Returns:
-            `float`: 
+            `float`:
                 The average time per call.
         """
         with self._lock:
@@ -155,7 +155,7 @@ class CostState:
         """Convert the cost state to a dictionary.
         
         Returns:
-            `dict[str, Any]`: 
+            `dict[str, Any]`:
                 The dictionary representation of the cost state.
         """
         with self._lock:
@@ -174,8 +174,8 @@ class CostState:
             }
 
     def update(
-        self, 
-        input_tokens: int, 
+        self,
+        input_tokens: int,
         output_tokens: int,
         total_time: float,
         histories: list[dict[str, list[dict[str, str]] | str | float | int]],
@@ -183,13 +183,13 @@ class CostState:
         """Update the cost state.
         
         Args:
-            input_tokens (`int`): 
+            input_tokens (`int`):
                 The number of input tokens consumed by the corresponding historical calls.
-            output_tokens (`int`): 
+            output_tokens (`int`):
                 The number of output tokens consumed by the corresponding historical calls.
-            total_time (`float`): 
+            total_time (`float`):
                 The time consumed by the corresponding historical calls.
-            histories (`list[dict[str, list[dict[str, str]] | str | float | int]]`): 
+            histories (`list[dict[str, list[dict[str, str]] | str | float | int]]`):
                 The new histories to be appended.
         """
         with self._lock:
@@ -203,14 +203,14 @@ class CostState:
         """Convert the cost state to a JSON string.
         
         Returns:
-            `str`: 
+            `str`:
                 The JSON string representation of the cost state.
         """
         return json.dumps(
-            self.to_dict(), 
-            indent=4, 
+            self.to_dict(),
+            indent=4,
             sort_keys=True,
-            ensure_ascii=False, 
+            ensure_ascii=False,
         )
     
     @classmethod
@@ -218,20 +218,20 @@ class CostState:
         """Create a cost state from a dictionary.
         
         Args:
-            data (`dict[str, Any]`): 
+            data (`dict[str, Any]`):
                 The dictionary representation of the cost state.
                 
         Returns:
-            `CostState`: 
+            `CostState`:
                 The cost state created from the dictionary.
         """
         allowed = [
-            "input_tokens", 
-            "output_tokens", 
-            "total_time", 
-            "window_size", 
-            "total_count", 
-            "histories", 
+            "input_tokens",
+            "output_tokens",
+            "total_time",
+            "window_size",
+            "total_count",
+            "histories",
         ]
         kwargs = {k: data[k] for k in allowed if k in data}
         return cls(**kwargs)
@@ -241,11 +241,11 @@ class CostState:
         """Create a cost state from a JSON string.
         
         Args:
-            json_str (`str`): 
+            json_str (`str`):
                 The JSON string representation of the cost state.
                 
         Returns:
-            `CostState`: 
+            `CostState`:
                 The cost state created from the JSON string.
         """
         return cls.from_dict(json.loads(json_str))
@@ -277,18 +277,18 @@ class CostStateManager:
         """Register an existing cost state and optional tokenizer for a model.
         
         Args:
-            model (`str`): 
+            model (`str`):
                 The model name to register. It is used as the key for the cost state
                 and the tokenizer.
-            state (`CostState | dict[str, CostState] | None`, optional): 
-                An existing cost state to associate with the model. If it is not provided, a fresh 
-                cost state is created. It also supports a dictionary of operation type names to their 
+            state (`CostState | dict[str, CostState] | None`, optional):
+                An existing cost state to associate with the model. If it is not provided, a fresh
+                cost state is created. It also supports a dictionary of operation type names to their
                 respective cost states.
-            tokenizer (`SelectTokenizerResponse | None`, optional): 
-                A pre-built tokenizer for the model. If it is not provided, one is automatically 
+            tokenizer (`SelectTokenizerResponse | None`, optional):
+                A pre-built tokenizer for the model. If it is not provided, one is automatically
                 resolved based on the model name.
-            exist_ok (`bool`, defaults to `False`): 
-                If it is enabled and the model is already registered, it will silently 
+            exist_ok (`bool`, defaults to `False`):
+                If it is enabled and the model is already registered, it will silently
                 overwrite the existing entry. Otherwise, it will raise an error.
         """
         with cls._lock:
@@ -296,8 +296,8 @@ class CostStateManager:
                 raise ValueError(
                     f"Model '{model}' has been already registered. Please pick another name."
                 )
-            # In the process of initialization, we can register a single model with a single `CostState`. 
-            # However, in the process of runtime, the number of `CostState` may be more than one. 
+            # In the process of initialization, we can register a single model with a single `CostState`.
+            # However, in the process of runtime, the number of `CostState` may be more than one.
             cls._states[model] = state or CostState()
             if tokenizer is not None:
                 cls._tokenizers[model] = tokenizer
@@ -309,12 +309,12 @@ class CostStateManager:
         """Get the cost state for a registered model.
         
         Args:
-            model (`str`): 
+            model (`str`):
                 The model name whose cost state is to be retrieved.
         
         Returns:
-            `CostState | dict[str, CostState]`: 
-                A single cost state if the model has no operation type distinction, 
+            `CostState | dict[str, CostState]`:
+                A single cost state if the model has no operation type distinction,
                 or a dictionary mapping operation type names to their respective cost states.
         """
         with cls._lock:
@@ -326,36 +326,36 @@ class CostStateManager:
     def update(
         cls,
         model: str,
-        input_output_pair: dict[str, dict[str, list[dict[str, str]] | str | float | int]],
+        input_output_pair: dict[str, dict[str, list[dict[str, Any]] | str | float | int]],
         **kwargs
     ) -> None:
         """Update a model's cost state based on a given invocation record.
         
-        An invocation record is represented as an input-output pair, which consists of an input 
-        dictionary, an output dictionary, and the elapsed wall-clock time. Both the input and 
-        output dictionaries must contain a ``"messages"`` key whose value is either a string or 
-        a list of messages in OpenAI-style chat format, representing the model's input and output respectively. 
+        An invocation record is represented as an input-output pair, which consists of an input
+        dictionary, an output dictionary, and the elapsed wall-clock time. Both the input and
+        output dictionaries must contain a ``"messages"`` key whose value is either a string or
+        a list of messages in OpenAI-style chat format, representing the model's input and output respectively.
         These messages  are used to compute token consumption via the tokenizer registered for the model.
 
-        You may also include additional metadata in the input and output dictionaries. In 
-        particular, this method checks whether the input dictionary contains a ``"metadata"`` key 
-        and whether that metadata contains an ``"op_type"`` field. If present, the token 
-        consumption for this model will be grouped by operation type. On the first such call, the 
-        single cost state is promoted to a dictionary mapping operation type names to their 
-        respective cost states. All subsequent calls must consistently include (or consistently 
-        omit) the operation type. This grouping enables more fine-grained analysis of token 
+        You may also include additional metadata in the input and output dictionaries. In
+        particular, this method checks whether the input dictionary contains a ``"metadata"`` key
+        and whether that metadata contains an ``"op_type"`` field. If present, the token
+        consumption for this model will be grouped by operation type. On the first such call, the
+        single cost state is promoted to a dictionary mapping operation type names to their
+        respective cost states. All subsequent calls must consistently include (or consistently
+        omit) the operation type. This grouping enables more fine-grained analysis of token
         consumption across different operations.
         
         Args:
-            model (`str`): 
+            model (`str`):
                 The registered model name to update.
-            input_output_pair (`dict[str, dict[str, list[dict[str, str]] | str | float | int]]`): 
-                An invocation record composed of three keys "input", "output", and "elapsed". 
-                The `"input"` and `"output"` keys must contain a `"messages"` key whose value is either a 
-                string or a list of messages in OpenAI-style chat format. The `"elapsed"` key must be a 
+            input_output_pair (`dict[str, dict[str, list[dict[str, Any]] | str | float | int]]`):
+                An invocation record composed of three keys "input", "output", and "elapsed".
+                The `"input"` and `"output"` keys must contain a `"messages"` key whose value is either a
+                string or a list of messages in OpenAI-style chat format. The `"elapsed"` key must be a
                 float or an integer representing the elapsed wall-clock time in seconds.
-            **kwargs: 
-                Additional keyword arguments forwarded to ``litellm.token_counter`` when computing 
+            **kwargs:
+                Additional keyword arguments forwarded to ``litellm.token_counter`` when computing
                 input tokens (e.g., ``tools``, ``tool_choice``).
         """
         if "input" not in input_output_pair or "output" not in input_output_pair:
@@ -405,32 +405,32 @@ class CostStateManager:
         
         if isinstance(inp, list):
             input_tokens = litellm_token_counter(
-                model=model, 
-                custom_tokenizer=tokenizer, 
+                model=model,
+                custom_tokenizer=tokenizer,
                 messages=inp,
                 **kwargs
             )
         else:
             input_tokens = litellm_token_counter(
-                model=model, 
-                custom_tokenizer=tokenizer, 
+                model=model,
+                custom_tokenizer=tokenizer,
                 text=inp,
                 **kwargs
             )
         input_dict["input_tokens"] = input_tokens
-        # NOTE: when we compute the output tokens, we don't consider 
+        # NOTE: when we compute the output tokens, we don't consider
         # `tools`, `tool_choice`, `use_default_image_token_count`, and `default_token_count`
         # as they are taken into account when we compute the input tokens.
         if isinstance(out, list):
             output_tokens = litellm_token_counter(
-                model=model, 
-                custom_tokenizer=tokenizer, 
+                model=model,
+                custom_tokenizer=tokenizer,
                 messages=out,
             )
         else:
             output_tokens = litellm_token_counter(
-                model=model, 
-                custom_tokenizer=tokenizer, 
+                model=model,
+                custom_tokenizer=tokenizer,
                 text=out,
             )
         output_dict["output_tokens"] = output_tokens
@@ -455,11 +455,11 @@ class CostStateManager:
         """Save all registered cost states to a JSON file.
         
         Args:
-            filename (`str`): 
+            filename (`str`):
                 The base filename (without the `.json` extension).
         """
         with cls._lock:
-            output_dict = {} 
+            output_dict = {}
             for model, state in cls._states.items():
                 if isinstance(state, CostState):
                     output_dict[model] = state.to_dict()
@@ -467,44 +467,44 @@ class CostStateManager:
                     output_dict[model] = {op: cs.to_dict() for op, cs in state.items()}
             with open(f"{filename}.json", 'w') as f:
                 json.dump(
-                    output_dict, 
-                    f, 
-                    indent=4, 
-                    ensure_ascii=False, 
-                    sort_keys=True, 
+                    output_dict,
+                    f,
+                    indent=4,
+                    ensure_ascii=False,
+                    sort_keys=True,
                 )
 
 
 def token_monitor(
     extract_model_name: Callable[..., tuple[str, dict[str, Any]]],
-    extract_input_dict: Callable[..., dict[str, list[dict[str, str]] | str | float | int]],
-    extract_output_dict: Callable[..., dict[str, list[dict[str, str]] | str | float | int]], 
+    extract_input_dict: Callable[..., dict[str, list[dict[str, Any]] | str | float | int]],
+    extract_output_dict: Callable[..., dict[str, list[dict[str, Any]] | str | float | int]],
 ) -> Callable:
     """
     Decorator to monitor token usage and latency for large language model (LLM) API calls.
     
     This decorator wraps sync or async callables, extracts model name and I/O payloads,
-    computes input/output tokens, measures elapsed time, and appends a structured record 
-    to the per-model cost state managed by the global cost state manager. The target function must 
+    computes input/output tokens, measures elapsed time, and appends a structured record
+    to the per-model cost state managed by the global cost state manager. The target function must
     complete successfully for an update to be recorded.
     
     Args:
-        extract_model_name (`Callable[..., tuple[str, dict[str, Any]]]`): 
-            A callable that returns a tuple containing the model name and metadata. The model name 
-            is an identifier used to retrieve the corresponding cost state from the global cost state manager. 
+        extract_model_name (`Callable[..., tuple[str, dict[str, Any]]]`):
+            A callable that returns a tuple containing the model name and metadata. The model name
+            is an identifier used to retrieve the corresponding cost state from the global cost state manager.
             The extracted metadata is used to configure the LiteLLM's token counter.
-        extract_input_dict (`Callable[..., dict[str, list[dict[str, str]] | str | float | int]]`): 
+        extract_input_dict (`Callable[..., dict[str, list[dict[str, Any]] | str | float | int]]`):
             A callable that builds the input dictionary. It must include a `"messages"` key
-            whose value is either in OpenAI-style chat format or a string. A `"timestamp"` string will be 
-            injected by the decorator. Users can customize this callable to extract related metadata to 
+            whose value is either in OpenAI-style chat format or a string. A `"timestamp"` string will be
+            injected by the decorator. Users can customize this callable to extract related metadata to
             conduct further analysis on the token usage.
-        extract_output_dict (`Callable[..., dict[str, list[dict[str, str]] | str | float | int]]`): 
+        extract_output_dict (`Callable[..., dict[str, list[dict[str, Any]] | str | float | int]]`):
             A callable that builds the output dictionary from the function result. It must include
-            a `"messages"` key. A `"timestamp"` string will be injected by the decorator. Users can customize 
+            a `"messages"` key. A `"timestamp"` string will be injected by the decorator. Users can customize
             this callable to extract related metadata to conduct further analysis on the token usage.
         
     Returns:
-        `Callable`: 
+        `Callable`:
             A wrapper that preserves the original LLM call behavior (i.e., it executes the
             wrapped function normally) and, on top of that, records the elapsed time and
             token usage. The wrapper preserves the original function's signature and
@@ -569,7 +569,7 @@ def token_monitor(
                 except Exception as e:
                     err = e
                     print(f"Error in {func.__name__}: \n\t{e.__class__.__name__}: {e}")
-                finally: 
+                finally:
                     end_time = datetime.now().astimezone()
                     output_dict = extract_output_dict(result if has_result else None)
                     output_dict["timestamp"] = end_time.isoformat(timespec="seconds")
@@ -599,13 +599,13 @@ def token_monitor(
         else:
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> Any:
-                # Extract the model name and metadata used during the token computation 
+                # Extract the model name and metadata used during the token computation
                 # The extraction function should be provided by the user
                 model_name, metadata = extract_model_name(*args, **kwargs)
 
-                # Extract the input dictionary 
+                # Extract the input dictionary
                 input_dict = extract_input_dict(*args, **kwargs)
-                start_time = datetime.now().astimezone() 
+                start_time = datetime.now().astimezone()
                 input_dict["timestamp"] = start_time.isoformat(timespec="seconds")
 
                 err = None
@@ -619,7 +619,7 @@ def token_monitor(
                     err = e
                     print(f"Error in {func.__name__}: \n\t{e.__class__.__name__}: {e}")
                 finally:
-                    end_time = datetime.now().astimezone() 
+                    end_time = datetime.now().astimezone()
                     # Extract the output dictionary.
                     output_dict = extract_output_dict(result if has_result else None)
                     output_dict["timestamp"] = end_time.isoformat(timespec="seconds")

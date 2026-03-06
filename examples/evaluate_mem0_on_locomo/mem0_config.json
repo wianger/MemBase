@@ -1,0 +1,19 @@
+{
+    "user_id": "guest",
+    "llm_provider": "openai",
+    "llm_model": "gpt-4.1-mini",
+    "llm_config": {
+        "openai_base_url": "YOUR_OPENAI_API_BASE",
+        "api_key": "YOUR_OPENAI_API_KEY"
+    },
+    "embedder_provider": "openai",
+    "embedding_model": "Qwen3-Embedding-4B",
+    "embedding_model_dims": 2560,
+    "embedding_config": {
+        "openai_base_url": "http://localhost:8008/v1",
+        "api_key": "EMPTY"
+    },
+    "graph_store_provider": "kuzu",
+    "graph_store_config": {},
+    "save_dir": "mem0_output"
+}

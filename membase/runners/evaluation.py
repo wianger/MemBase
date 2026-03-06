@@ -2,8 +2,8 @@ import json
 import os
 from string import Template
 from pydantic import (
-    BaseModel, 
-    ConfigDict, 
+    BaseModel,
+    ConfigDict,
     Field,
 )
 from ..datasets import DATASET_MAPPING
@@ -17,7 +17,7 @@ def answer_questions(
     retrievals: list[dict[str, Any]],
     qa_model: str,
     qa_batch_size: int = 4,
-    add_question_timestamp: bool = False, 
+    add_question_timestamp: bool = False,
     prompt_template: Callable[[], Template] | None = None,
     context_builder: Callable[[list[MemoryEntry]], str] | None = None,
     interface_kwargs: dict[str, Any] | None = None,
@@ -25,25 +25,25 @@ def answer_questions(
     """Answer questions using retrieved memories and an LLM.
 
     Args:
-        retrievals (`list[dict[str, Any]]`): 
+        retrievals (`list[dict[str, Any]]`):
             The retrieval results produced by the search runner.
-        qa_model (`str`): 
+        qa_model (`str`):
             Model name or path for question answering.
-        qa_batch_size (`int`, defaults to `4`): 
+        qa_batch_size (`int`, defaults to `4`):
             Batch size for question-answering.
-        add_question_timestamp (`bool`, defaults to `False`): 
+        add_question_timestamp (`bool`, defaults to `False`):
             Whether to append the question timestamp to the prompt.
-        prompt_template (`Callable[[], Template] | None`, optional): 
-            A factory that returns a `string.Template` with 
+        prompt_template (`Callable[[], Template] | None`, optional):
+            A factory that returns a `string.Template` with
             `$question` and `$context` placeholders.
-        context_builder (`Callable[[list[MemoryEntry]], str] | None`, optional): 
-            A callable that converts a list of memory entries into a single 
+        context_builder (`Callable[[list[MemoryEntry]], str] | None`, optional):
+            A callable that converts a list of memory entries into a single
             context string.
-        interface_kwargs (`dict[str, Any] | None`, optional): 
+        interface_kwargs (`dict[str, Any] | None`, optional):
             Extra keyword arguments forwarded to the LLM operator.
 
     Returns:
-        `list[dict[str, Any]]`: 
+        `list[dict[str, Any]]`:
             Raw LLM response dictionaries.
     """
     interface_kwargs = interface_kwargs or {}
@@ -72,13 +72,13 @@ def answer_questions(
     qa_operator = QuestionAnsweringOperator(
         prompt_name="default-question-answering",
         model_name=qa_model,
-        timeout=120.0, 
+        timeout=120.0,
         **interface_kwargs,
     )
 
     if prompt_template is not None:
         qa_operator.set_prompt(prompt_template())
-
+                
     responses = qa_operator(
         questions,
         contexts,
@@ -158,7 +158,7 @@ class EvaluationRunnerConfig(BaseModel):
 class EvaluationRunner:
     """Runner that orchestrates the question-answering and evaluation stage.
 
-    It loads retrieval results, generates answers via an LLM, and then 
+    It loads retrieval results, generates answers via an LLM, and then
     delegates judgment to the dataset-specific evaluation logic.
     """
 
@@ -166,7 +166,7 @@ class EvaluationRunner:
         """Initialize the evaluation runner.
 
         Args:
-            config (`EvaluationRunnerConfig`): 
+            config (`EvaluationRunnerConfig`):
                 The runner configuration.
         """
         self.config = config
@@ -194,10 +194,10 @@ class EvaluationRunner:
         """Execute the question-answering and evaluation pipeline.
 
         Returns:
-            `list[dict[str, Any]]`: 
-                A list of evaluation results. Each element is a dictionary 
-                containing the question-answer pair, the prediction, the accuracy, 
-                the judge response, the retrieved memories, and the user id.
+            `list[dict[str, Any]]`:
+                A list of evaluation results. Each element is a dictionary
+                containing the question-answer pair, the prediction, the metrics,
+                the retrieved memories, and the user id.
         """
         cfg = self.config
         interface_kwargs = self._resolve_interface_kwargs()
@@ -257,8 +257,7 @@ class EvaluationRunner:
                 {
                     "qa_pair": qa_pair.model_dump(mode="python"),
                     "prediction": predictions[i],
-                    "accuracy": judge_results[i]["accuracy"],
-                    "judge_response": judge_results[i]["judge_response"],
+                    "metrics": judge_results[i],
                     "retrieved_memories": [
                         mem.model_dump(mode="python")
                         for mem in item["retrieved_memories"]

@@ -1,31 +1,31 @@
 from __future__ import annotations
 from datetime import datetime
-from abc import ABC, abstractmethod
-import random 
+import random
 import uuid
+import os
+from pathlib import Path
 from pydantic import (
-    BaseModel, 
-    Field, 
+    BaseModel,
+    Field,
     field_validator,
     computed_field,
     PrivateAttr,
-    ModelWrapValidatorHandler, 
+    ModelWrapValidatorHandler,
     model_validator,
 )
-from ..inference_utils.operators import LLMExactMatch 
 from typing import (
     Callable,
-    Literal, 
+    Literal,
     Any,
-    Self, 
-    Iterator, 
-) 
+    Self,
+    Iterator,
+)
 
 
 class BaseMetadataModel(BaseModel):
     """Base class that provides a private metadata field and its serialization logic.
     
-    This class ensures that metadata is stored as a private attribute while 
+    This class ensures that metadata is stored as a private attribute while
     remaining accessible and serializable through a computed field.
     """
 
@@ -45,8 +45,8 @@ class BaseMetadataModel(BaseModel):
     @model_validator(mode="wrap")
     @classmethod
     def _restore_metadata_private_attrs(
-        cls, 
-        values: Any, 
+        cls,
+        values: Any,
         handler: ModelWrapValidatorHandler[Self]
     ) -> Self:
         """Restore private metadata from serialized data during deserialization.
@@ -65,7 +65,7 @@ class BaseMetadataModel(BaseModel):
             return handler(values)
         
         # Extract metadata from the input dictionary if it exists.
-        metadata = values.get("metadata", {}) 
+        metadata = values.get("metadata", {})
         
         instance = handler(values)
         instance._metadata = metadata
@@ -100,9 +100,9 @@ class Message(BaseMetadataModel):
     role: Literal["user", "assistant", "system"] = Field(
         description=(
             "Role of the message sender. Must be one of: 'user', 'assistant', 'system'. "
-            "'user' means the message is from the user, 'assistant' means the message is from the AI assistant, " 
-            "'system' means the message is from the system which refers to an AI-centered integrated architecture " 
-            "that encompasses the assistant, perception modules (e.g., sensors), external tools, memory components, " 
+            "'user' means the message is from the user, 'assistant' means the message is from the AI assistant, "
+            "'system' means the message is from the system which refers to an AI-centered integrated architecture "
+            "that encompasses the assistant, perception modules (e.g., sensors), external tools, memory components, "
             "and actuators that collectively enable autonomous perception, reasoning, and action."
         ),
     )
@@ -124,7 +124,7 @@ class Message(BaseMetadataModel):
                 True if this message's timestamp is earlier than the other's.
         """
         if isinstance(other, Message | QuestionAnswerPair):
-            return datetime.fromisoformat(self.timestamp) < datetime.fromisoformat(other.timestamp) 
+            return datetime.fromisoformat(self.timestamp) < datetime.fromisoformat(other.timestamp)
         if isinstance(other, Session):
             return datetime.fromisoformat(self.timestamp) < datetime.fromisoformat(other.started_at)
         return NotImplemented
@@ -179,7 +179,7 @@ class QuestionAnswerPair(BaseMetadataModel):
                 True if this question-answer pair is asked earlier than the other's.
         """
         if isinstance(other, Message | QuestionAnswerPair):
-            return datetime.fromisoformat(self.timestamp) < datetime.fromisoformat(other.timestamp) 
+            return datetime.fromisoformat(self.timestamp) < datetime.fromisoformat(other.timestamp)
         if isinstance(other, Session):
             return datetime.fromisoformat(self.timestamp) < datetime.fromisoformat(other.started_at)
         return NotImplemented
@@ -244,9 +244,9 @@ class Session(BaseMetadataModel):
             `list[Message]`:
                 The list of messages in the session.
         """
-        prev_msg = None 
-        for i, current_msg in enumerate(v): 
-            if prev_msg is None: 
+        prev_msg = None
+        for i, current_msg in enumerate(v):
+            if prev_msg is None:
                 prev_msg = current_msg
                 continue
             if current_msg < prev_msg:
@@ -262,7 +262,7 @@ class Session(BaseMetadataModel):
     @computed_field
     @property
     def started_at(self) -> str:
-        """Return the start time of the session (the first message's timestamp) 
+        """Return the start time of the session (the first message's timestamp)
         in ISO 8601 format.
         
         Returns:
@@ -274,7 +274,7 @@ class Session(BaseMetadataModel):
     @computed_field
     @property
     def ended_at(self) -> str:
-        """Return the end time of the session (the last message's timestamp) 
+        """Return the end time of the session (the last message's timestamp)
         in ISO 8601 format.
         
         Returns:
@@ -285,8 +285,8 @@ class Session(BaseMetadataModel):
 
     @classmethod
     def create_from_messages(
-        cls, 
-        messages: list[Message], 
+        cls,
+        messages: list[Message],
         **kwargs: Any
     ) -> Session:
         """Create a session instance by pre-sorting messages and setting metadata.
@@ -301,8 +301,8 @@ class Session(BaseMetadataModel):
             `Session`:
                 A new session instance with sorted messages and metadata.
         """
-        # Pre-sort messages to satisfy the chronological validator. 
-        # Note that we allow identical timestamps for now. 
+        # Pre-sort messages to satisfy the chronological validator.
+        # Note that we allow identical timestamps for now.
         # In some datasets, there are multiple messages with the same timestamp.
         sorted_messages = sorted(messages)
         
@@ -325,7 +325,7 @@ class Session(BaseMetadataModel):
         return self.messages[index]
 
 
-class Trajectory(BaseMetadataModel): 
+class Trajectory(BaseMetadataModel):
     """Represent a user trajectory in the memory system evaluation datasets."""
     
     id: str = Field(
@@ -333,15 +333,15 @@ class Trajectory(BaseMetadataModel):
         description="Unique trajectory identifier.",
     )
     sessions: list[Session] = Field(
-        ..., 
-        description="The sessions in the trajectory.", 
+        ...,
+        description="The sessions in the trajectory.",
         min_length=1,
     )
 
     @classmethod
     def create_from_sessions(
-        cls, 
-        sessions: list[Session], 
+        cls,
+        sessions: list[Session],
         **kwargs: Any
     ) -> Trajectory:
         """Create a trajectory instance by pre-sorting sessions and setting metadata.
@@ -356,7 +356,7 @@ class Trajectory(BaseMetadataModel):
             `Trajectory`:
                 A new trajectory instance with sorted sessions and metadata.
         """
-        # Pre-sort sessions to satisfy the chronological validator. 
+        # Pre-sort sessions to satisfy the chronological validator.
         # In some datasets, there are multiple sessions with the same start time.
         sorted_sessions = sorted(sessions)
         
@@ -379,16 +379,16 @@ class Trajectory(BaseMetadataModel):
         return self.sessions[index]
 
 
-class MemoryDataset(BaseMetadataModel, ABC):
+class MemoryDataset(BaseMetadataModel):
     """A memory system evaluation dataset."""
 
     trajectories: list[Trajectory] = Field(
-        ..., 
+        ...,
         description="The trajectories in the dataset.",
         min_length=1,
     )
     qa_pair_lists: list[list[QuestionAnswerPair]] = Field(
-        ..., 
+        ...,
         description=(
             "The list of question-answer pairs for each trajectory in the dataset. "
             "The length of the list is the same as the number of trajectories."
@@ -398,7 +398,7 @@ class MemoryDataset(BaseMetadataModel, ABC):
 
     @model_validator(mode="after")
     def _validate_lengths(self) -> Self:
-        """Validate that the number of trajectories and the number of question-answer 
+        """Validate that the number of trajectories and the number of question-answer
         pair lists are the same.
         
         Returns:
@@ -412,23 +412,21 @@ class MemoryDataset(BaseMetadataModel, ABC):
             )
         return self
 
-    @abstractmethod
     def _generate_metadata(self) -> dict[str, Any]:
         """Generate the metadata of the dataset.
 
         This method should be overridden by subclasses to provide dataset-specific metadata.
-        For example, some datasets may include question difficulty levels, while others 
-        may provide source evidences, domain categories, or other annotations relevant 
+        For example, some datasets may include question difficulty levels, while others
+        may provide source evidences, domain categories, or other annotations relevant
         to the evaluation task.
         
         Returns:
             `dict[str, Any]`:
                 The metadata of the dataset.
         """
-        raise NotImplementedError("Subclasses should implement the method `_generate_metadata`.")
+        return {}
 
     @classmethod
-    @abstractmethod
     def read_raw_data(cls, path: str) -> MemoryDataset:
         """Read the raw data from the given path and construct a dataset instance.
 
@@ -447,7 +445,7 @@ class MemoryDataset(BaseMetadataModel, ABC):
             `MemoryDataset`:
                 The dataset instance constructed from the raw data.
         """
-        raise NotImplementedError("Subclasses should implement `read_raw_data`.")
+        return cls.read_dataset(path)
     
     @model_validator(mode="after")
     def _process_metadata(self) -> Self:
@@ -493,8 +491,8 @@ class MemoryDataset(BaseMetadataModel, ABC):
         self.qa_pair_lists = [self.qa_pair_lists[i] for i in indices]
 
     def sample(
-        self, 
-        size: int | None = None, 
+        self,
+        size: int | None = None,
         seed: int | None = None,
         sample_filter: Callable[[Trajectory, list[QuestionAnswerPair]], bool] | None = None,
         question_filter: Callable[[QuestionAnswerPair], bool] | None = None,
@@ -503,14 +501,14 @@ class MemoryDataset(BaseMetadataModel, ABC):
 
         This method supports a three-stage pipeline:
 
-        1. Sample-level filtering: Each trajectory and its corresponding question-answer pair list are 
-        evaluated by the filter predicate. Only samples for which the predicate returns `True` are retained. 
+        1. Sample-level filtering: Each trajectory and its corresponding question-answer pair list are
+        evaluated by the filter predicate. Only samples for which the predicate returns `True` are retained.
         This is useful, for example, to keep only trajectories whose token count is within a certain range.
-        2. Question-level filtering: Within each retained sample, the question-answer pair list is further filtered 
+        2. Question-level filtering: Within each retained sample, the question-answer pair list is further filtered
         at the individual pair level. Samples whose question-answer pair list becomes empty after this step are discarded.
-        This is useful, for example, to keep only question-answer pairs of a specific question type 
+        This is useful, for example, to keep only question-answer pairs of a specific question type
         (e.g., single-hop, multi-hop, temporal).
-        3. Random sampling: A random subset of samples is drawn (without replacement) from the filtered results 
+        3. Random sampling: A random subset of samples is drawn (without replacement) from the filtered results
         based on the provided size parameter.
 
         If neither size parameter nor any filter is provided, a new dataset instance
@@ -546,7 +544,7 @@ class MemoryDataset(BaseMetadataModel, ABC):
         # Stage 1: filter at the trajectory level.
         if sample_filter is not None:
             paired = [
-                (traj, qas) 
+                (traj, qas)
                 for traj, qas in zip(trajectories, qa_pair_lists)
                 if sample_filter(traj, qas)
             ]
@@ -623,167 +621,6 @@ class MemoryDataset(BaseMetadataModel, ABC):
 
         return header + "\n" + bar + ("\n" + "\n".join(body_lines) if body_lines else "")
     
-    @classmethod
-    def get_judge_template_name(cls, qa_pair: QuestionAnswerPair) -> str:
-        """Get the judge prompt template name for a question-answer pair.
-
-        Subclasses can overwrite this method to customize the LLM-as-a-Judge prompt template.
-
-        Args:
-            qa_pair (`QuestionAnswerPair`):
-                The question-answer pair to get the judge prompt template name for.
-
-        Returns:
-            `str`:
-                The name of the judge prompt template.
-        """
-        return qa_pair.metadata.get("question_type", "default-exact-match")
-
-    @classmethod
-    def parse_judge_response(cls, content: str) -> float:
-        """Convert the raw text output from the judge model into a correctness score.
-
-        The default behaviour checks whether the word `"yes"` appears in the 
-        lowercased response. Subclasses can override this method to accommodate 
-        different judge formats.
-
-        Args:
-            content (`str`):
-                The raw text content returned by the judge model.
-
-        Returns:
-            `float`:
-                `1.0` if the prediction is judged correct, `0.0` otherwise.
-        """
-        return float("yes" in content.lower())
-
-    @classmethod
-    def evaluate(
-        cls,
-        qa_pairs: list[QuestionAnswerPair],
-        predictions: list[str],
-        judge_model: str = "gpt-4.1-mini",
-        judge_batch_size: int = 4,
-        **kwargs: Any,
-    ) -> list[dict[str, float | str]]:
-        """Evaluate the predictions against the golden answers for each question-answer pair.
-
-        This base implementation uses an LLM-as-a-Judge approach to determine whether 
-        each prediction is correct by comparing it against the golden answers. The judge 
-        prompt template is resolved via ``get_judge_template_name``, and the raw judge 
-        output is converted to a correctness score via ``parse_judge_response``. Subclasses 
-        can override either of these class methods to customize the judging behaviour.
-
-        Subclasses can also override this method to incorporate additional evaluation
-        metrics beyond accuracy. For example, a dataset that annotates source evidence 
-        in each question-answer pair could compute retrieval recall@k by comparing the 
-        retrieved results against the ground-truth evidence IDs. When overriding, call 
-        ``super().evaluate(...)`` first to obtain the base accuracy results, then merge 
-        the extra per-pair metrics into each result dictionary::
-
-            @classmethod
-            def evaluate(cls, qa_pairs, predictions, **kwargs):
-                results = super().evaluate(qa_pairs, predictions, **kwargs)
-                retrieval_results = kwargs.get("retrieval_results", [])
-                for i, qa_pair in enumerate(qa_pairs):
-                    evidence_ids = set(qa_pair.metadata.get("evidence_ids", []))
-                    retrieved_ids = set(r["id"] for r in retrieval_results[i])
-                    hit = len(evidence_ids & retrieved_ids)
-                    k = len(retrieval_results[i]) if retrieval_results else 1
-                    results[i][f"recall@{k}"] = hit / len(evidence_ids) if evidence_ids else 0.0
-                return results
-
-        Args:
-            qa_pairs (`list[QuestionAnswerPair]`):
-                The question-answer pairs to evaluate.
-            predictions (`list[str]`):
-                The predicted answers, one per question-answer pair.
-            judge_model (`str`, defaults to `"gpt-4.1-mini"`):
-                The model name or path used for the LLM judge.
-            judge_batch_size (`int`, defaults to `4`):
-                Batch size for the judge model inference.
-            **kwargs (`Any`):
-                Remaining keyword arguments are forwarded to the LLM interface 
-                constructor. If `api_key`, `api_keys`, `base_url` or `base_urls` is present, 
-                an OpenAI-compatible API backend is used and the remaining arguments correspond 
-                to those accepted by `openai.OpenAI`. Otherwise, a local vLLM backend is assumed and 
-                the arguments correspond to `vllm.LLM` constructor parameters. An optional `generation_config` 
-                dictionary can be included to supply generation-time parameters (mapping to the chat completions 
-                request body for OpenAI, or `vllm.SamplingParams` for vLLM). If `generation_config` is not provided, 
-                `{"temperature": 0.0}` is used by default for deterministic judging.
-
-        Returns:
-            `list[dict[str, float | str]]`:
-                Per-pair evaluation results containing the accuracy and the judge response.
-        """
-        if len(qa_pairs) != len(predictions):
-            raise ValueError(
-                f"The number of question-answer pairs ({len(qa_pairs)}) and predictions "
-                f"({len(predictions)}) must be the same."
-            )
-
-        # Separate generation-time config from interface constructor kwargs.
-        generation_config = {"temperature": 0.0}
-        generation_config.update(kwargs.pop("generation_config", {}))
-
-        # Group question-answer pairs by their judge template name so that pairs sharing
-        # the same prompt can be evaluated in a single batched call.
-        groups = {}
-        for idx, qa_pair in enumerate(qa_pairs):
-            template_name = cls.get_judge_template_name(qa_pair)
-            groups.setdefault(template_name, []).append(idx)
-
-        results = [{} for _ in range(len(qa_pairs))]
-
-        # Use the first group's template to initialize the operator; subsequent
-        # groups switch the prompt via `set_prompt`.
-        first_template = next(iter(groups))
-        judge_operator = LLMExactMatch(
-            prompt_name=first_template,
-            model_name=judge_model,
-            **kwargs,
-        )
-
-        for template_name, indices in groups.items():
-            judge_operator.set_prompt(template_name)
-
-            batch_questions = [qa_pairs[i].question for i in indices]
-            batch_golden_answers = [qa_pairs[i].golden_answers for i in indices]
-            batch_predictions = [predictions[i] for i in indices]
-
-            judge_responses = judge_operator(
-                batch_questions,
-                batch_golden_answers,
-                batch_predictions,
-                batch_size=judge_batch_size,
-                aggregate=False,
-                **generation_config,
-            )
-
-            for local_pos, global_idx in enumerate(indices):
-                content = judge_responses[local_pos].get("processed_content")
-                if content is None:
-                    raise ValueError(
-                        "The judge model's response for question "
-                        f"'{qa_pairs[global_idx].question}' is empty."
-                    )
-                results[global_idx] = {
-                    "accuracy": cls.parse_judge_response(content),
-                    "judge_response": content,
-                }
-            
-            # Aggregate each group's results and print the average accuracy. 
-            accuracy = sum([results[i]["accuracy"] for i in indices]) / len(indices)
-            print(
-                "The accuracy for the question-answer pairs evaluated with the judging template " 
-                f"'{template_name}' is {accuracy:.4f}."
-            )
-        
-        overall_accuracy = sum([results[i]["accuracy"] for i in range(len(results))]) / len(results)
-        print(f"The overall accuracy is {overall_accuracy:.4f}.")
-
-        return results
-
     def __len__(self) -> int:
         """Return the size of the dataset."""
         return len(self.trajectories)
@@ -795,3 +632,33 @@ class MemoryDataset(BaseMetadataModel, ABC):
     def __getitem__(self, index: int) -> tuple[Trajectory, list[QuestionAnswerPair]]:
         """Get the trajectory and question-answer pair list at the given index."""
         return self.trajectories[index], self.qa_pair_lists[index]
+
+    @classmethod
+    def read_dataset(cls, path: str) -> MemoryDataset:
+        """Read the standardized dataset from the given path.
+        
+        Args:
+            path (`str`):
+                The path to the standardized dataset.
+        
+        Returns:
+            `MemoryDataset`:
+                The standardized dataset.
+        """
+        return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+    def save_dataset(self, name: str) -> None:
+        """Serialize the dataset to a JSON file.
+
+        Args:
+            name (`str`):
+                File stem without the ".json" extension.
+        """
+        name = f"{name}.json"
+        dir_name = os.path.dirname(name)
+        if not os.path.exists(dir_name):
+            os.makedirs(dir_name)
+
+        Path(name).write_text(
+            self.model_dump_json(indent=4), encoding="utf-8"
+        )

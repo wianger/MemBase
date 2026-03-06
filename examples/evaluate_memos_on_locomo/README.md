@@ -119,6 +119,8 @@ LoCoMo trajectories are conversations between two users. In this example, we mai
 
 This stage reads the standardized dataset saved by Stage 1 (with `--dataset-standardized`).
 
+> **Note**: The `dataset_path` in the search and evaluation scripts must point to the **standardized** dataset produced by Stage 1, not the original raw data file. Because Stage 1 samples a subset of trajectories from the full dataset, memory is only constructed for that subset. The standardized file records exactly which trajectories are sampled, so subsequent stages must use it to stay consistent.
+
 Adversarial questions are excluded via `--question-filter-path`, which points to [`question_filter.py`](question_filter.py). You can modify this filter to target other question types (see `membase/datasets/locomo.py` for all available types).
 
 ```bash

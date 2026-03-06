@@ -91,6 +91,7 @@ Using the retrieved memories as context, a question-answering model generates an
 
 - [A-MEM](https://github.com/WujiangXu/A-mem-sys)
 - [LangMem](https://github.com/langchain-ai/langmem)
+- [Mem0](https://github.com/mem0ai/mem0)
 - [MemOS](https://github.com/MemTensor/MemOS)
 - [EverMemOS](https://github.com/EverMind-AI/EverMemOS)
 - [HippoRAG2](https://github.com/OSU-NLP-Group/HippoRAG)
@@ -113,6 +114,7 @@ See the [`examples/`](examples/) directory for step-by-step tutorials:
 | Example | Description |
 |---------|-------------|
 | [Evaluate A-MEM on LongMemEval](examples/evaluate_amem_on_longmemeval/) | Run the full three-stage evaluation pipeline (construction, retrieval, QA) using A-MEM on LongMemEval |
+| [Evaluate Mem0 on LoCoMo](examples/evaluate_mem0_on_locomo/) | Evaluate Mem0 (with Kuzu graph store) on LoCoMo, with a custom question-answering prompt and adversarial question filtering |
 | [Evaluate MemOS on LoCoMo](examples/evaluate_memos_on_locomo/) | Evaluate MemOS with vLLM-served embedding on LoCoMo, with adversarial question filtering |
 | [Download Models](examples/download_models/) | Download pre-trained embedding and reranker models from Hugging Face |
 

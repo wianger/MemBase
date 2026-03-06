@@ -18,13 +18,13 @@ from ..utils import (
 )
 from ..model_types.memory import MemoryEntry
 from ..model_types.dataset import Message
-import pickle 
+import pickle
 import os
 import json
 from typing import Any, ClassVar
 
 
-def _normalize_langmem_messages(*args: Any, **kwargs: Any) -> list[dict[str, str]]:
+def _normalize_langmem_messages(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
     """A helper function to process the messages of LangMem."""
     messages = kwargs.get("messages", args[0])
     assert len(messages) == 1, "Unconsidered Case where the number of messages is not equal to 1."
@@ -34,17 +34,17 @@ def _normalize_langmem_messages(*args: Any, **kwargs: Any) -> list[dict[str, str
         if isinstance(message, SystemMessage):
             normalized_messages.append(
                 {
-                    "role": "system", 
+                    "role": "system",
                     "content": message.content
                 }
             )
         elif isinstance(message, HumanMessage):
             normalized_messages.append(
                 {
-                    "role": "user", 
+                    "role": "user",
                     "content": message.content
                 }
-            ) 
+            )
         elif isinstance(message, AIMessage):
             if message.content is not None and not isinstance(message.content, str):
                 raise ValueError(
@@ -52,26 +52,26 @@ def _normalize_langmem_messages(*args: Any, **kwargs: Any) -> list[dict[str, str
                 )
             normalized_messages.append(
                 {
-                    "role": "assistant", 
+                    "role": "assistant",
                     "content": message.content,
                     "tool_calls": [
                         {
-                            "id": tool_call["id"], 
-                            "type": "function", 
+                            "id": tool_call["id"],
+                            "type": "function",
                             "function": {
                                 "name": tool_call["name"],
                                 "arguments": str(tool_call["args"]),
                             }
                         }
                         for tool_call in message.tool_calls
-                    ], 
+                    ],
                 }
             )
         elif isinstance(message, ToolMessage):
-            # See https://platform.openai.com/docs/guides/function-calling 
+            # See https://platform.openai.com/docs/guides/function-calling
             normalized_messages.append(
                 {
-                    "role": "tool", 
+                    "role": "tool",
                     "tool_call_id": message.tool_call_id,
                     "content": message.content,
                 }
@@ -83,30 +83,30 @@ def _normalize_langmem_messages(*args: Any, **kwargs: Any) -> list[dict[str, str
 
 
 def _extract_langmem_model(
-    llm_model: str, 
-    query_model: str | None, 
-    *args: Any,  
+    llm_model: str,
+    query_model: str | None,
+    *args: Any,
     **kwargs: Any
 ) -> tuple[str, dict[str, Any]]:
     """A helper function to extract the model name and metadata for LangMem."""
     llm_model = llm_model.split(':', 1)[1]
-    query_model = query_model.split(':', 1)[1] if query_model is not None else None 
+    query_model = query_model.split(':', 1)[1] if query_model is not None else None
 
     messages = kwargs.get("messages", args[0])
     assert len(messages) == 1, "Unconsidered Case where the number of messages is not equal to 1."
     messages = messages[0]
-    # The following parameters are used in LiteLLM's token counter. 
+    # The following parameters are used in LiteLLM's token counter.
     metadata = {
-        "tools": kwargs.get("tools"), 
-        "tool_choice": kwargs.get("tool_choice"), 
-    } 
+        "tools": kwargs.get("tools"),
+        "tool_choice": kwargs.get("tool_choice"),
+    }
     if isinstance(messages[0], HumanMessage) and messages[0].content.startswith(
         "Use parallel tool calling to search for distinct memories relevant to this conversation."
     ):
         if query_model is None:
             raise ValueError("Query model is not provided.")
-        return query_model, metadata 
-    return llm_model, metadata 
+        return query_model, metadata
+    return llm_model, metadata
 
 
 def _extract_langmem_output(response: Any) -> dict[str, list[dict[str, str]] | str | float | int]:
@@ -117,7 +117,7 @@ def _extract_langmem_output(response: Any) -> dict[str, list[dict[str, str]] | s
         "messages": _normalize_langmem_messages(
             [[response.generations[0][0].message]]
         )
-    } 
+    }
 
 
 class LangMemLayer(MemBaseLayer):
@@ -125,7 +125,7 @@ class LangMemLayer(MemBaseLayer):
     layer_type: ClassVar[str] = "LangMem"
 
     def __init__(self, config: LangMemConfig) -> None:
-        """Create an interface of LangMem. The implementation is based on the 
+        """Create an interface of LangMem. The implementation is based on the
         third-party library `langmem`."""
         self._llm_model = init_chat_model(
             config.llm_model,
@@ -141,27 +141,27 @@ class LangMemLayer(MemBaseLayer):
         )
         self._store = InMemoryStore(
             index={
-                "dims": config.retriever_dim, 
+                "dims": config.retriever_dim,
                 "embed": init_embeddings(
                     config.retriever_name_or_path,
                     **config.embedding_kwargs,
-                ), 
-                "fields": ["content"],   # `kind` is ignored as there is only one kind of memory. 
-            }, 
-        ) 
+                ),
+                "fields": ["content"],   # `kind` is ignored as there is only one kind of memory.
+            },
+        )
         self.memory_layer = create_memory_store_manager(
             self._llm_model,
-            enable_inserts=config.enable_inserts, 
-            enable_deletes=config.enable_deletes, 
-            query_model=self._query_model,  
-            query_limit=config.query_limit, 
-            namespace=("memories", config.user_id),  
-            store=self._store, 
+            enable_inserts=config.enable_inserts,
+            enable_deletes=config.enable_deletes,
+            query_model=self._query_model,
+            query_limit=config.query_limit,
+            namespace=("memories", config.user_id),
+            store=self._store,
         )
-        self.config = config 
+        self.config = config
 
         # Store each memory unit's id.
-        self._memory_ids = {}  
+        self._memory_ids = {}
     
     @property
     def llm_model(self) -> BaseChatModel:
@@ -176,37 +176,37 @@ class LangMemLayer(MemBaseLayer):
         # See https://langchain-ai.github.io/langmem/background_quickstart/
         # `kwargs` can include some optional parameters, e.g., `max_steps`.
         final_puts = self.memory_layer.invoke({"messages": [message_dict]}, **kwargs)
-        # Some operations update contents of previous memory units. 
-        for final_put in final_puts: 
+        # Some operations update contents of previous memory units.
+        for final_put in final_puts:
             self._memory_ids[final_put["key"]] = final_put["value"]
 
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
         message_level = kwargs.pop("message_level", True)
         if message_level not in [True, False]:
             raise TypeError(
-                "`message_level` must be a boolean to indicate whether the messages " 
+                "`message_level` must be a boolean to indicate whether the messages "
                 "are added to the memory layer message by message or as a whole."
             )
         
         if message_level:
-            for message in messages: 
+            for message in messages:
                 self.add_message(message, **kwargs)
         else:
             message_dicts = [
                 {
-                    "role": m.role, 
-                    "name": m.name, 
+                    "role": m.role,
+                    "name": m.name,
                     "content": f"{m.content}\nTimestamp: {m.timestamp}",
                 }
                 for m in messages
             ]
             final_puts = self.memory_layer.invoke({"messages": message_dicts}, **kwargs)
-            for final_put in final_puts: 
+            for final_put in final_puts:
                 self._memory_ids[final_put["key"]] = final_put["value"]
     
     def retrieve(self, query: str, k: int = 10, **kwargs: Any) -> list[MemoryEntry]:
         memories = self.memory_layer.search(query=query, limit=k, **kwargs)
-        outputs = [] 
+        outputs = []
         for memory in memories:
             memory_dict = memory.dict()
             content = memory_dict["value"]["content"]
@@ -216,12 +216,12 @@ class LangMemLayer(MemBaseLayer):
             }
             outputs.append(
                 MemoryEntry(
-                    content=content, 
+                    content=content,
                     formatted_content=content,
                     metadata=metadata,
                 )
             )
-        return outputs  
+        return outputs
 
     def delete(self, memory_id: str) -> bool:
         try:
@@ -239,8 +239,8 @@ class LangMemLayer(MemBaseLayer):
         content = kwargs.pop("content")
         try:
             self.memory_layer.put(
-                memory_id, 
-                {"content": content}, 
+                memory_id,
+                {"content": content},
                 **kwargs
             )
             return True
@@ -254,7 +254,7 @@ class LangMemLayer(MemBaseLayer):
         pkl_path = os.path.join(self.config.save_dir, f"{user_id}.pkl")
         config_path = os.path.join(self.config.save_dir, "config.json")
         if not os.path.exists(pkl_path) or not os.path.exists(config_path):
-            return False 
+            return False
         
         with open(config_path, 'r', encoding="utf-8") as f:
             config_dict = json.load(f)
@@ -278,34 +278,34 @@ class LangMemLayer(MemBaseLayer):
         )
         self._store = InMemoryStore(
             index={
-                "dims": config.retriever_dim, 
+                "dims": config.retriever_dim,
                 "embed": init_embeddings(
                     config.retriever_name_or_path,
                     **config.embedding_kwargs,
-                ), 
-                "fields": ["content"],   
+                ),
+                "fields": ["content"],
             }
         )
         self.memory_layer = create_memory_store_manager(
             self._llm_model,
-            enable_inserts=config.enable_inserts, 
-            enable_deletes=config.enable_deletes, 
-            query_model=self._query_model,  
-            query_limit=config.query_limit, 
-            namespace=("memories", config.user_id),  
-            store=self._store, 
+            enable_inserts=config.enable_inserts,
+            enable_deletes=config.enable_deletes,
+            query_model=self._query_model,
+            query_limit=config.query_limit,
+            namespace=("memories", config.user_id),
+            store=self._store,
         )
-        self.config = config 
+        self.config = config
         
         with open(pkl_path, "rb") as f:
             predefined_memory_units = pickle.load(f)
-        self._memory_ids.clear()   
+        self._memory_ids.clear()
 
         for memory_unit in predefined_memory_units:
-            self.memory_layer.put(**memory_unit) 
+            self.memory_layer.put(**memory_unit)
             self._memory_ids[memory_unit["key"]] = memory_unit["value"]
 
-        return True 
+        return True
 
     def save_memory(self) -> None:
         os.makedirs(self.config.save_dir, exist_ok=True)
@@ -319,10 +319,10 @@ class LangMemLayer(MemBaseLayer):
         with open(config_path, 'w', encoding="utf-8") as f:
             json.dump(config_dict, f, indent=4)
 
-        # In LangMem, we don't store the vector embeddings. 
-        preserved_memory_units = [] 
-        for key, value in self._memory_ids.items(): 
-            # Note that some memory units have been deleted. 
+        # In LangMem, we don't store the vector embeddings.
+        preserved_memory_units = []
+        for key, value in self._memory_ids.items():
+            # Note that some memory units have been deleted.
             if self.memory_layer.get(key) is not None:
                 memory_unit = {
                     "key": key,
@@ -342,14 +342,14 @@ class LangMemLayer(MemBaseLayer):
             setter=setter,
             wrapper=token_monitor(
                 extract_model_name=lambda *args, **kwargs: _extract_langmem_model(
-                    self.config.llm_model, 
-                    self.config.query_model, 
-                    *args, 
+                    self.config.llm_model,
+                    self.config.query_model,
+                    *args,
                     **kwargs
                 ),
                 extract_input_dict=lambda *args, **kwargs: {
-                    # NOTE: LangMem uses the same prompt to generate and update memories. 
-                    # These two types of operations are handled by the same forward pass of LLMs. 
+                    # NOTE: LangMem uses the same prompt to generate and update memories.
+                    # These two types of operations are handled by the same forward pass of LLMs.
                     "messages": _normalize_langmem_messages(*args, **kwargs),
                     "metadata": {
                         "op_type": "generation, update"
