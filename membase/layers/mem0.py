@@ -289,7 +289,7 @@ class Mem0Layer(MemBaseLayer):
                                     "these facts should be added, updated, or deleted in the memory."
                                 ) in kwargs.get(
                                     "messages", 
-                                    args[0] if len(args) > 0 else ""
+                                    args[0] if len(args) > 0 else [{"content": ""}]
                                 )[0]["content"]
                             else "generation"
                         )
