@@ -78,6 +78,7 @@ class NaiveRAGLayer(MemBaseLayer, MessageBufferMixin):
             self.get_namespace(),
             query=query,
             limit=k,
+            **kwargs, 
         )
         outputs = [] 
         for memory in memories:
