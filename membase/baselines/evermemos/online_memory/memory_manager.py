@@ -423,9 +423,16 @@ class OnlineMemoryManager:
     
     def retrieve(self, query: str, k: int = 10, **kwargs) -> List[Tuple[Dict[str, Any], float]]:
         """Synchronous wrapper for retrieve_async."""
-        return asyncio.run(
-            self.retrieve_async(query, k, **kwargs)
-        )
+        async def _run():
+            try:
+                return await self.retrieve_async(query, k, **kwargs)
+            finally:
+                # Reset the async HTTP client to avoid "Event loop is closed" errors
+                # when the next `asyncio.run()` creates a new event loop.
+                await self._index_manager._vectorize_service.close()
+                if self._retriever._reranker is not None:
+                    await self._retriever._reranker.close()
+        return asyncio.run(_run())
     
     async def flush_async(self) -> Optional[MemCell]:
         """
