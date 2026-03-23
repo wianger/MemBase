@@ -79,6 +79,13 @@ if __name__ == "__main__":
         type=str, 
         help="The type of the dataset used to evaluate the memory layer."
     )
+    parser.add_argument(
+        "--metrics",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Metric names to compute.",
+    )
     args = parser.parse_args()
 
     context_builder = (
@@ -101,5 +108,6 @@ if __name__ == "__main__":
         context_builder=context_builder,
         prompt_template=prompt_template,
         add_question_timestamp=args.add_question_timestamp,
+        metrics=args.metrics,
     )
     EvaluationRunner(runner_config).run()

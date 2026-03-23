@@ -1,5 +1,9 @@
 from __future__ import annotations
-from ..inference_utils.operators import LLMExactMatch
+from ..evaluation import (
+    DEFAULT_METRICS, 
+    MetricResult,
+    load_metrics,
+)
 from ..model_types.dataset import MemoryDataset, QuestionAnswerPair
 from typing import Any
 
@@ -53,23 +57,24 @@ class MemBaseDataset(MemoryDataset):
         cls,
         qa_pairs: list[QuestionAnswerPair],
         predictions: list[str],
+        metrics: list[str] | None = None,
+        metric_configs: dict[str, dict[str, Any]] | None = None,
         judge_model: str = "gpt-4.1-mini",
         judge_batch_size: int = 4,
         **kwargs: Any,
-    ) -> list[dict[str, dict[str, Any]]]:
-        """Evaluate the predictions against the golden answers for each question-answer pair.
+    ) -> list[dict[str, MetricResult]]:
+        """Evaluate predictions against golden answers using configurable metrics.
 
-        This base implementation uses an LLM-as-a-Judge approach to determine whether
-        each prediction is correct by comparing it against the golden answers. The judge
-        prompt template is resolved via ``get_judge_template_name``, and the raw judge
-        output is converted to a correctness score via ``parse_judge_response``. Subclasses
-        can override either of these class methods to customize the judging behaviour.
+        By default the metrics F1 score, BLEU score, and LLM-as-a-Judge score are computed.
+        Users can select a different set via the ``metrics`` parameter and
+        supply per-metric configuration through ``metric_configs``.
 
-        Subclasses can also override this method to incorporate additional evaluation
-        metrics beyond accuracy. For example, a dataset that annotates source evidence
-        in each question-answer pair could compute retrieval recall@k by comparing the
-        retrieved results against the ground-truth evidence IDs. When overriding, call
-        ``super().evaluate(...)`` first to obtain the base accuracy results, then merge
+        Subclasses can also override this method to incorporate additional
+        evaluation metrics beyond the built-in set.  For example, a dataset
+        that annotates source evidence in each question-answer pair could
+        compute retrieval recall@k by comparing the retrieved results against
+        the ground-truth evidence IDs.  When overriding, call
+        ``super().evaluate(...)`` first to obtain the base results, then merge
         the extra per-pair metrics into each result dictionary::
 
             @classmethod
@@ -92,22 +97,27 @@ class MemBaseDataset(MemoryDataset):
                 The question-answer pairs to evaluate.
             predictions (`list[str]`):
                 The predicted answers, one per question-answer pair.
+            metrics (`list[str] | None`, optional):
+                Names of metrics to compute. If it is not provided, the default metrics will be used.
+            metric_configs (`dict[str, dict[str, Any]] | None`, optional):
+                Per-metric keyword arguments keyed by metric name. For example,
+                it can be `{"bleu": {"n_gram": 2, "lowercase": True}, "bertscore": {"lang": "zh"}}`.
             judge_model (`str`, defaults to `"gpt-4.1-mini"`):
                 The model name or path used for the LLM judge.
-            judge_batch_size (`int`, defaults to `4`):
+            judge_batch_size (`int`, defaults to `4`):   
                 Batch size for the judge model inference.
             **kwargs (`Any`):
                 Remaining keyword arguments are forwarded to the LLM interface
-                constructor. If `api_key`, `api_keys`, `base_url` or `base_urls` is present,
-                an OpenAI-compatible API backend is used and the remaining arguments correspond
-                to those accepted by `openai.OpenAI`. Otherwise, a local vLLM backend is assumed and
-                the arguments correspond to `vllm.LLM` constructor parameters. An optional `generation_config`
-                dictionary can be included to supply generation-time parameters (mapping to the chat completions
+                constructor.  If `api_key`, `api_keys`, `base_url` or
+                `base_urls` is present, an OpenAI-compatible API backend is
+                used.  Otherwise a local vLLM backend is assumed.  An optional
+                `generation_config` dictionary can be included to supply
+                generation-time parameters (mapping to the chat completions
                 request body for OpenAI, or `vllm.SamplingParams` for vLLM). If `generation_config` is not provided,
                 `{"temperature": 0.0}` is used by default for deterministic judging.
 
         Returns:
-            `list[dict[str, dict[str, Any]]]`:
+            `list[dict[str, MetricResult]]`:
                 Per-pair evaluation results containing the metrics.
         """
         if len(qa_pairs) != len(predictions):
@@ -116,57 +126,44 @@ class MemBaseDataset(MemoryDataset):
                 f"({len(predictions)}) must be the same."
             )
 
-        # Separate generation-time config from interface constructor kwargs.
-        generation_config = {"temperature": 0.0}
-        generation_config.update(kwargs.pop("generation_config", {}))
+        metric_names = metrics if metrics is not None else DEFAULT_METRICS
+        metric_configs = metric_configs or {}
 
-        # Group question-answer pairs by their judge template name so that pairs sharing
-        # the same prompt can be evaluated in a single batched call.
-        groups = {}
-        for idx, qa_pair in enumerate(qa_pairs):
-            template_name = cls.get_judge_template_name(qa_pair)
-            groups.setdefault(template_name, []).append(idx)
+        # Inject LLM judge-specific config from the top-level arguments so
+        # that callers can keep using the familiar original signature 
+        # without manually constructing metric_configs.
+        if "llm_judge" in metric_names:
+            judge_cfg = metric_configs.get("llm_judge", {})
+            judge_cfg.setdefault("judge_model", judge_model)
+            judge_cfg.setdefault("judge_batch_size", judge_batch_size)
+            # Forward API-related kwargs to the LLM judge.
+            for key in ("api_keys", "base_urls", "api_key", "base_url"):
+                if key in kwargs and key not in judge_cfg:
+                    judge_cfg[key] = kwargs[key]
+            metric_configs["llm_judge"] = judge_cfg
 
-        results = [{} for _ in range(len(qa_pairs))]
+        loaded_metrics = load_metrics(metric_names, metric_configs)
 
-        # Use the first group's template to initialize the operator; subsequent
-        # groups switch the prompt via `set_prompt`.
-        first_template = next(iter(groups))
-        judge_operator = LLMExactMatch(
-            prompt_name=first_template,
-            model_name=judge_model,
-            **kwargs,
-        )
+        # Build references list from question-answer pairs (multi-reference).
+        references = [qa.golden_answers for qa in qa_pairs]
 
-        for template_name, indices in groups.items():
-            judge_operator.set_prompt(template_name)
+        results = [
+            {} for _ in range(len(qa_pairs))
+        ]
 
-            batch_questions = [qa_pairs[i].question for i in indices]
-            batch_golden_answers = [qa_pairs[i].golden_answers for i in indices]
-            batch_predictions = [predictions[i] for i in indices]
+        for metric in loaded_metrics:
+            # The LLM judge requires extra context beyond predictions and references.
+            extra_kwargs = {}
+            if metric.metric_name == "llm_judge":
+                extra_kwargs["qa_pairs"] = qa_pairs
+                extra_kwargs["get_judge_template_name"] = cls.get_judge_template_name
+                extra_kwargs["parse_judge_response"] = cls.parse_judge_response
+                if "generation_config" in kwargs:
+                    extra_kwargs["generation_config"] = kwargs["generation_config"]
 
-            judge_responses = judge_operator(
-                batch_questions,
-                batch_golden_answers,
-                batch_predictions,
-                batch_size=judge_batch_size,
-                aggregate=False,
-                **generation_config,
-            )
-
-            for local_pos, global_idx in enumerate(indices):
-                content = judge_responses[local_pos].get("processed_content")
-                if content is None:
-                    raise ValueError(
-                        "The judge model's response for question "
-                        f"'{qa_pairs[global_idx].question}' is empty."
-                    )
-                results[global_idx] = {
-                    "llm_judge": {
-                        "value": cls.parse_judge_response(content),
-                        "metadata": {"judge_response": content},
-                    },
-                }
+            metric_results = metric.compute(predictions, references, **extra_kwargs)
+            for i, mr in enumerate(metric_results):
+                results[i][metric.metric_name] = mr
 
         # Print the evaluation summary.
         cls.print_evaluation_summary(results, qa_pairs)

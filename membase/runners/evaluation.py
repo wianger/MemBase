@@ -153,6 +153,14 @@ class EvaluationRunnerConfig(BaseModel):
         default=False,
         description="Append the question timestamp to the prompt.",
     )
+    metrics: list[str] | None = Field(
+        default=None,
+        description="Metric names to compute.",
+    )
+    metric_configs: dict[str, dict[str, Any]] | None = Field(
+        default=None,
+        description="Per-metric configuration overrides keyed by metric name.",
+    )
 
 
 class EvaluationRunner:
@@ -205,7 +213,7 @@ class EvaluationRunner:
 
         # Load and deserialize retrieval results.
         with open(cfg.search_results_path, "r") as f:
-            retrievals = json.load(f)
+            retrievals = json.load(f)[:8]
         for item in retrievals:
             item["qa_pair"] = QuestionAnswerPair(**item["qa_pair"])
             item["retrieved_memories"] = [
@@ -244,6 +252,8 @@ class EvaluationRunner:
         judge_results = dataset_cls.evaluate(
             qa_pairs=qa_pairs,
             predictions=predictions,
+            metrics=cfg.metrics,
+            metric_configs=cfg.metric_configs,
             judge_model=cfg.judge_model,
             judge_batch_size=cfg.judge_batch_size,
             **interface_kwargs,

@@ -27,6 +27,7 @@ MemBase/
     ├── runners/                 # Runner classes for programmatic pipeline execution
     ├── configs/                 # Configuration classes for each memory layer
     ├── datasets/                # Dataset loaders
+    ├── evaluation/              # Pluggable evaluation metrics and registry
     ├── layers/                  # Memory layer implementations
     ├── baselines/               # Vendored baseline source code
     ├── inference_utils/         # QA and evaluation operators
@@ -83,7 +84,7 @@ Given the constructed memory, this stage retrieves the top-k most relevant memor
 
 ### Stage 3: Question Answering & Evaluation
 
-Using the retrieved memories as context, a question-answering model generates answers for each question. A judge model then evaluates whether the generated answers match the ground truth, producing final accuracy metrics.
+Using the retrieved memories as context, a question-answering model generates answers for each question. The evaluation stage then computes one or more metrics over the generated answers. By default, MemBase reports token-level F1, BLEU, and an LLM-as-a-Judge score, and users can choose a custom metric subset through the evaluation CLI.
 
 ---
 
