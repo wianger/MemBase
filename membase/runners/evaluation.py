@@ -213,7 +213,7 @@ class EvaluationRunner:
 
         # Load and deserialize retrieval results.
         with open(cfg.search_results_path, "r") as f:
-            retrievals = json.load(f)[:8]
+            retrievals = json.load(f)
         for item in retrievals:
             item["qa_pair"] = QuestionAnswerPair(**item["qa_pair"])
             item["retrieved_memories"] = [
