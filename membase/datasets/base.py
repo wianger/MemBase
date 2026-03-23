@@ -1,9 +1,6 @@
 from __future__ import annotations
-from ..evaluation import (
-    DEFAULT_METRICS, 
-    MetricResult,
-    load_metrics,
-)
+from ..evaluation import DEFAULT_METRICS, load_metrics
+from ..evaluation.base import MetricResult
 from ..model_types.dataset import MemoryDataset, QuestionAnswerPair
 from typing import Any
 

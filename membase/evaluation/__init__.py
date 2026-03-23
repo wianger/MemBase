@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from ..utils._lazy_mapping import _LazyMapping
-from .base import BaseMetric, MetricResult
+from .base import BaseMetric
 from typing import Any
 
 
@@ -67,7 +67,5 @@ def load_metrics(
 __all__ = [
     "METRIC_MAPPING",
     "DEFAULT_METRICS",
-    "BaseMetric",
-    "MetricResult",
     "load_metrics",
 ]
