@@ -111,7 +111,11 @@ class Mem0Layer(MemBaseLayer):
         # Following Mem0's implementation (https://github.com/mem0ai/mem0/blob/main/evaluation/src/memzero/add.py#L83).
         try:
             self.memory_layer.add(
-                messages=text,
+                messages={
+                    "content": text,
+                    "role": message.role,
+                    "name": message.name,
+                },
                 user_id=self.config.user_id,
                 metadata={
                     "timestamp": message.timestamp, 
