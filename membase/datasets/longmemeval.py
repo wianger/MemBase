@@ -22,7 +22,7 @@ class LongMemEval(MemBaseDataset):
         trajectories = []
         qa_pair_lists = []
 
-        for sample in data:
+        for i, sample in enumerate(data, start=1):
             question_datetime = datetime.strptime(
                 sample["question_date"], 
                 "%Y/%m/%d (%a) %H:%M"
@@ -43,31 +43,44 @@ class LongMemEval(MemBaseDataset):
                 },
             )
 
-            sessions = []
-            for i, raw_session in enumerate(sample["haystack_sessions"]):
+            sessions, evidence = [], [] 
+            for j, raw_session in enumerate(sample["haystack_sessions"], start=1):
                 # There are some empty sessions to be skipped.  
                 if not raw_session:
                     continue
-                session_id = sample["haystack_session_ids"][i]
+                session_id = sample["haystack_session_ids"][j - 1]
                 iso_ts = datetime.strptime(
-                    sample["haystack_dates"][i], 
+                    sample["haystack_dates"][j - 1], 
                     "%Y/%m/%d (%a) %H:%M"
                 ).isoformat()
+
+                messages = [] 
+                for k, message in enumerate(raw_session, start=1):
+                    msg_id = f"longmemeval-message-{i}-{j}-{k}"
+                    messages.append(
+                        Message(
+                            id=msg_id,
+                            name=message["role"],
+                            role=message["role"],
+                            content=message["content"],
+                            timestamp=iso_ts,
+                            metadata={
+                                "has_answer": message.get("has_answer", False),
+                            },
+                        )
+                    )
+
+                    if message.get("has_answer", False):
+                        evidence.append(msg_id)
 
                 sessions.append(
                     Session(
                         id=session_id,
-                        messages=[
-                            Message(
-                                name=message["role"],
-                                role=message["role"],
-                                content=message["content"],
-                                timestamp=iso_ts,
-                            )
-                            for message in raw_session
-                        ],
+                        messages=messages,
                     )
                 )
+
+            qa_pair.update_metadata({"evidence": evidence})
 
             trajectories.append(
                 Trajectory(
