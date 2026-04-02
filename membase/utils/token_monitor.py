@@ -1,6 +1,7 @@
 from __future__ import annotations
 import functools
 import json
+import os
 from collections import deque
 from threading import RLock, Lock
 from litellm import token_counter as litellm_token_counter
@@ -29,7 +30,20 @@ def get_tokenizer_for_model(model: str) -> SelectTokenizerResponse:
             The litellm tokenizer for the model.
     """
     try:
-        tokenizer = Tokenizer.from_pretrained(model)
+        # Prefer local tokenizer files when a local path is provided.
+        # `Tokenizer.from_pretrained` expects a HF repo id and raises validation
+        # errors for absolute local paths.
+        if os.path.isdir(model):
+            tokenizer_json_path = os.path.join(model, "tokenizer.json")
+            if not os.path.isfile(tokenizer_json_path):
+                raise FileNotFoundError(
+                    f"tokenizer.json is not found under local model path: {model}"
+                )
+            tokenizer = Tokenizer.from_file(tokenizer_json_path)
+        elif os.path.isfile(model) and model.endswith(".json"):
+            tokenizer = Tokenizer.from_file(model)
+        else:
+            tokenizer = Tokenizer.from_pretrained(model)
         return SelectTokenizerResponse(
             type="huggingface_tokenizer",
             tokenizer=tokenizer,

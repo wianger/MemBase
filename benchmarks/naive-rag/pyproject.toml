@@ -1,0 +1,17 @@
+[project]
+name = "membase-naive-rag-benchmark"
+version = "0.1.0"
+description = "Standalone uv environment for MemBase Naive-RAG benchmark"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain==1.2.11",
+    "langgraph==1.1.0",
+    "langchain-huggingface==1.2.1",
+    "langchain-openai==1.1.11",
+    "litellm==1.82.1",
+    "sentence-transformers==5.2.3",
+    "openai>=2.26.0,<3.0.0",
+    "tqdm==4.67.1",
+    "pydantic==2.11.10",
+    "nltk==3.9.2",
+]

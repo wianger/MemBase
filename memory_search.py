@@ -82,6 +82,21 @@ if __name__ == "__main__":
         action="store_true",
         help="Whether to raise an error if no memory is found for a user."
     )
+    parser.add_argument(
+        "--token-cost-save-filename",
+        type=str,
+        default=None,
+        help=(
+            "Base filename (without .json) for persisting token cost statistics "
+            "collected during search."
+        ),
+    )
+    parser.add_argument(
+        "--tokenizer-path",
+        type=str,
+        default=None,
+        help="Tokenizer model/path used for token counting registration.",
+    )
     args = parser.parse_args()
 
     question_filter = None
@@ -99,6 +114,8 @@ if __name__ == "__main__":
         start_idx=args.start_idx,
         end_idx=args.end_idx,
         strict=args.strict,
+        token_cost_save_filename=args.token_cost_save_filename,
+        tokenizer_path=args.tokenizer_path,
         question_filter=question_filter,
     )
     SearchRunner(runner_config).run()

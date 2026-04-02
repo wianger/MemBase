@@ -249,5 +249,8 @@ $RECYCLE.BIN/
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,linux,windows,python
 models/
-outputs/
 .codex
+.venv/
+.uv-cache/
+.run/
+output/

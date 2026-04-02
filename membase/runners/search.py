@@ -1,7 +1,9 @@
 import json
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
+from datetime import datetime
 from pydantic import (
     BaseModel, 
     ConfigDict, 
@@ -13,6 +15,11 @@ from ..datasets import DATASET_MAPPING
 from ..layers import MEMORY_LAYERS_MAPPING
 from ..model_types.dataset import QuestionAnswerPair
 from ..model_types.memory import MemoryEntry
+from ..utils import (
+    CostState,
+    CostStateManager,
+    get_tokenizer_for_model,
+)
 from typing import Any, Callable
 
 
@@ -102,8 +109,33 @@ def memory_search(
     # Perform retrieval for each question.
     for qa_pair in pbar:
         query = qa_pair.question
+        start_time = datetime.now()
         # Perform retrieval using the unified interface.
         retrieved_memories = layer.retrieve(query, k=top_k)
+        elapsed = (datetime.now() - start_time).total_seconds()
+
+        # Track embedding-side token usage when model metadata is available.
+        embedding_model = getattr(layer, "embedding_model_name", None)
+        if embedding_model is not None:
+            try:
+                CostStateManager.update(
+                    embedding_model,
+                    {
+                        "input": {
+                            "messages": query,
+                            "metadata": {"op_type": "embedding_retrieval_query"},
+                        },
+                        # Embedding APIs do not produce text output tokens.
+                        "output": {"messages": ""},
+                        "elapsed": elapsed,
+                    },
+                )
+            except Exception as e:
+                print(
+                    "⚠️ Failed to record embedding token cost during retrieval "
+                    f"for model '{embedding_model}': {e.__class__.__name__}: {e}"
+                )
+
         retrieval_result = {
             "retrieved_memories": [
                 memory.model_dump(mode="python")
@@ -172,6 +204,17 @@ class SearchRunnerConfig(BaseModel):
         default=False,
         description="Whether to raise an error if no memory is found for a user.",
     )
+    token_cost_save_filename: str | None = Field(
+        default=None,
+        description=(
+            "Base filename (without .json) for persisting token cost statistics "
+            "collected during search. If omitted, token cost is not saved by search."
+        ),
+    )
+    tokenizer_path: str | None = Field(
+        default=None,
+        description="Tokenizer model/path used for token counting registration.",
+    )
     question_filter: Callable[[QuestionAnswerPair], bool] | None = Field(
         default=None,
         description="A callable that filters the evaluation questions.",
@@ -213,6 +256,19 @@ class SearchRunner:
         """
         cfg = self.config
         config = self._resolve_memory_config()
+        token_cost = {}
+        if cfg.token_cost_save_filename is not None and \
+           os.path.exists(cfg.token_cost_save_filename + ".json"):
+            with open(cfg.token_cost_save_filename + ".json", "r", encoding="utf-8") as f:
+                token_cost = json.load(f)
+            for model, state in token_cost.items():
+                if "histories" in state:
+                    token_cost[model] = CostState.from_dict(state)
+                else:
+                    token_cost[model] = {
+                        op: CostState.from_dict(cs)
+                        for op, cs in state.items()
+                    }
 
         # Prepare the dataset using lazy mapping.
         ds_cls = DATASET_MAPPING[cfg.dataset_type]
@@ -232,6 +288,23 @@ class SearchRunner:
         end_idx = min(end_idx, len(dataset))
         if start_idx >= end_idx:
             raise ValueError("The starting index must be less than the ending index.")
+
+        # Register embedding models for token accounting when enabled.
+        if cfg.token_cost_save_filename is not None:
+            dummy_config = CONFIG_MAPPING[cfg.memory_type](**config)
+            embedding_models = dummy_config.get_embedding_models()
+            if cfg.tokenizer_path is not None:
+                tokenizer = get_tokenizer_for_model(cfg.tokenizer_path)
+            else:
+                tokenizer = None
+            for embedding_model in embedding_models:
+                state = token_cost.get(embedding_model)
+                CostStateManager.register(
+                    embedding_model,
+                    state=state,
+                    tokenizer=tokenizer,
+                    exist_ok=True,
+                )
 
         # Dispatch per-user retrieval to a thread pool.
         print("🔍 Searching memories for each trajectory...")
@@ -270,5 +343,9 @@ class SearchRunner:
                 indent=4,
             )
         print(f"✅ {len(retrievals)} retrieval results are saved to {output_path}.")
+
+        if cfg.token_cost_save_filename is not None:
+            CostStateManager.save_to_json_file(cfg.token_cost_save_filename)
+            CostStateManager.reset()
 
         return retrievals

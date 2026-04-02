@@ -302,6 +302,7 @@ class ConstructionRunner:
         # Please ensure all types of config classes have a `get_llm_models` method. 
         # The tokenizer is inferred from the model name automatically. 
         llm_models = dummy_config.get_llm_models()
+        embedding_models = dummy_config.get_embedding_models()
         if cfg.tokenizer_path is not None:
             tokenizer = get_tokenizer_for_model(cfg.tokenizer_path)
         else:
@@ -319,6 +320,22 @@ class ConstructionRunner:
         if len(llm_models) > 0:
             print(
                 f"The LLM model(s) 🤖 being used are {', '.join(llm_models)}. "
+                "They have been registered in `CostStateManager`."
+            )
+            print()
+
+        for embedding_model in embedding_models:
+            state = token_cost.get(embedding_model)
+            if state is not None:
+                print(
+                    f"There is a saved checkpoint 📁 for monitoring the token consumption of embedding model "
+                    f"{embedding_model} 🧠. It will be loaded into `CostStateManager`."
+                )
+            # Embedding token accounting does not require chat tokenizer registration here.
+            CostStateManager.register(embedding_model, state=state, tokenizer=None)
+        if len(embedding_models) > 0:
+            print(
+                f"The embedding model(s) 🧠 being used are {', '.join(embedding_models)}. "
                 "They have been registered in `CostStateManager`."
             )
             print()

@@ -40,3 +40,15 @@ class MemBaseConfig(BaseModel):
                 A list containing the names of the LLM models used for memory construction.
         """
         return [] 
+
+    def get_embedding_models(self) -> list[str]:
+        """Get the embedding models used in the memory layer.
+
+        Subclasses can override this method to list embedding models whose
+        token usage should be monitored during construction/search.
+
+        Returns:
+            `list[str]`:
+                A list containing the names of embedding models used by the layer.
+        """
+        return []

@@ -2,6 +2,7 @@ import uuid
 import os 
 import json 
 import pickle 
+from datetime import datetime
 from collections import deque 
 from langchain.embeddings import init_embeddings
 from langgraph.store.memory import InMemoryStore
@@ -10,6 +11,7 @@ from .base import MemBaseLayer
 from ..configs.naive_rag import NaiveRAGConfig
 from ..model_types.memory import MemoryEntry
 from ..model_types.dataset import Message
+from ..utils import CostStateManager
 from typing import Any, ClassVar
 
 
@@ -37,6 +39,8 @@ class NaiveRAGLayer(MemBaseLayer, MessageBufferMixin):
             }, 
         ) 
         self.config = config
+        # Used by runners to attribute embedding token accounting.
+        self.embedding_model_name = config.retriever_name_or_path.split(":", 1)[1]
 
         # Store each memory unit's id.
         self._memory_ids = set() 
@@ -50,13 +54,53 @@ class NaiveRAGLayer(MemBaseLayer, MessageBufferMixin):
         """
         return ("memories", self.config.user_id)
 
+    def _track_embedding_tokens(
+        self,
+        text: str,
+        op_type: str,
+        elapsed: float,
+    ) -> None:
+        """Record embedding-side token cost in the global cost state manager.
+
+        The framework uses a unified token monitor designed for LLM messages.
+        For embedding operations, we treat the input text as ``messages`` and
+        keep output empty.
+        """
+        if not text:
+            return
+        try:
+            CostStateManager.update(
+                self.embedding_model_name,
+                {
+                    "input": {
+                        "messages": text,
+                        "metadata": {"op_type": op_type},
+                    },
+                    "output": {"messages": ""},
+                    "elapsed": elapsed,
+                },
+            )
+        except Exception as e:
+            # Token accounting must never block the benchmark pipeline.
+            print(
+                "⚠️ Failed to record embedding token cost in NaiveRAGLayer "
+                f"({op_type}): {e.__class__.__name__}: {e}"
+            )
+
     def add_message(self, message: Message, **kwargs: Any) -> None:
         text = f"Speaker {message.name} (role: {message.role}) says: {message.content}\nTimestamp: {message.timestamp}"
 
         # Add the current message into the buffer and get the document to index.
+        start_time = datetime.now()
         doc = self._buffer_and_get_doc(
             message_content=text, 
             separator=self.config.message_separator,
+        )
+        elapsed = (datetime.now() - start_time).total_seconds()
+        self._track_embedding_tokens(
+            text=text,
+            op_type="embedding_ingestion_message",
+            elapsed=elapsed,
         )
         if doc is not None:
             # Index the document into naive RAG.
@@ -64,8 +108,15 @@ class NaiveRAGLayer(MemBaseLayer, MessageBufferMixin):
             value = {
                 "content": doc, 
             }
+            start_time = datetime.now()
             self.memory_layer.put(self.get_namespace(), mem_id, value) 
+            elapsed = (datetime.now() - start_time).total_seconds()
             self._memory_ids.add(mem_id)
+            self._track_embedding_tokens(
+                text=doc,
+                op_type="embedding_ingestion_document",
+                elapsed=elapsed,
+            )
 
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
         for message in messages:
@@ -187,6 +238,7 @@ class NaiveRAGLayer(MemBaseLayer, MessageBufferMixin):
 
         self._memory_ids.clear()
         self.config = config 
+        self.embedding_model_name = config.retriever_name_or_path.split(":", 1)[1]
         namespace = self.get_namespace()
         for memory_unit in predefined_memory_units:
             self.memory_layer.put(
@@ -246,5 +298,12 @@ class NaiveRAGLayer(MemBaseLayer, MessageBufferMixin):
             value = {
                 "content": doc, 
             }
+            start_time = datetime.now()
             self.memory_layer.put(self.get_namespace(), mem_id, value) 
+            elapsed = (datetime.now() - start_time).total_seconds()
             self._memory_ids.add(mem_id)
+            self._track_embedding_tokens(
+                text=doc,
+                op_type="embedding_ingestion_document",
+                elapsed=elapsed,
+            )

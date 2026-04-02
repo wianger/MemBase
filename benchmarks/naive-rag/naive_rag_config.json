@@ -1,0 +1,15 @@
+{
+    "user_id": "guest",
+    "save_dir": "benchmarks/naive-rag/output",
+    "max_tokens": null,
+    "num_overlap_msgs": 0,
+    "message_separator": "\n",
+    "deferred": false,
+    "llm_model": "qwen3.5-0.8b",
+    "retriever_name_or_path": "openai:qwen3-embedding-0.6b",
+    "retriever_dim": 1024,
+    "embedding_kwargs": {
+        "api_key": "EMPTY",
+        "base_url": "http://10.46.131.226:8001/v1"
+    }
+}

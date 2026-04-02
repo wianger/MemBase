@@ -124,3 +124,14 @@ class NaiveRAGConfig(MemBaseConfig):
         if not provider or not model_name:
             raise ValueError("Provider and model name must be non-empty, separated by ':'.")
         return v 
+
+    def get_embedding_models(self) -> list[str]:
+        """Return embedding model names used by NaiveRAG for token monitoring.
+
+        ``retriever_name_or_path`` follows ``<provider>:<model_name>``.
+        For cost tracking we use ``model_name`` so logs align with provider APIs.
+        """
+        if self.retriever_name_or_path is None:
+            return []
+        _, model_name = self.retriever_name_or_path.split(":", 1)
+        return [model_name]
