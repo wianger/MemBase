@@ -215,6 +215,10 @@ class SearchRunnerConfig(BaseModel):
         default=None,
         description="Tokenizer model/path used for token counting registration.",
     )
+    embedding_tokenizer_path: str | None = Field(
+        default=None,
+        description="Tokenizer model/path used for embedding token counting registration.",
+    )
     question_filter: Callable[[QuestionAnswerPair], bool] | None = Field(
         default=None,
         description="A callable that filters the evaluation questions.",
@@ -295,6 +299,10 @@ class SearchRunner:
                 tokenizer = get_tokenizer_for_model(cfg.tokenizer_path)
             else:
                 tokenizer = None
+            if cfg.embedding_tokenizer_path is not None:
+                embedding_tokenizer = get_tokenizer_for_model(cfg.embedding_tokenizer_path)
+            else:
+                embedding_tokenizer = None
 
             # Preserve previously collected states (e.g., Stage 1 construction stats).
             for model, state in token_cost.items():
@@ -312,7 +320,7 @@ class SearchRunner:
                 CostStateManager.register(
                     embedding_model,
                     state=state,
-                    tokenizer=tokenizer,
+                    tokenizer=embedding_tokenizer,
                     exist_ok=True,
                 )
 

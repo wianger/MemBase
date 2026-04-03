@@ -48,6 +48,13 @@ cd benchmarks/mem0
 - `LLM_MODEL`（默认 `qwen3.5-0.8b`）
 - `EMBEDDING_MODEL`（默认 `qwen3-embedding-0.6b`）
 - `EMBEDDER_PROVIDER`（默认 `lmstudio`，可选 `openai`）
+- `ENABLE_RERANKER`（默认 `1`，设为 `0` 关闭）
+- `RERANKER_PROVIDER`（默认 `llm_reranker`）
+- `RERANKER_MODEL`（默认 `qwen3-reranker-8b`）
+- `RERANKER_LLM_PROVIDER`（默认 `openai`，当前仅 `llm_reranker` 场景使用）
+- `RERANKER_BASE_URL`（默认 `LLM_BASE_URL`，用于 `llm_reranker + openai`）
+- `RERANKER_API_KEY`（默认 `API_KEY`）
+- `RERANKER_TOP_K`（默认 `TOP_K`）
 - `API_KEY`（默认 `EMPTY`）
 - `DATASET_PATH`（默认 LoCoMo10）
 - `NUM_WORKERS`（默认 `8`）
@@ -83,6 +90,17 @@ SAMPLE_SIZE=5 \
 ```bash
 cd benchmarks/mem0
 NUM_WORKERS=8 ./run_all.sh
+```
+
+开启 reranker（使用 `qwen3-reranker-8b`）示例：
+
+```bash
+cd benchmarks/mem0
+ENABLE_RERANKER=1 \
+RERANKER_PROVIDER=llm_reranker \
+RERANKER_MODEL=qwen3-reranker-8b \
+RERANKER_BASE_URL=http://10.46.131.226:8002/v1 \
+./run_all.sh
 ```
 
 ## 输出文件
@@ -127,6 +145,16 @@ Mem0 的 `openai` embedder 会在请求中携带 `dimensions` 参数，从而触
 cd benchmarks/mem0
 EMBEDDER_PROVIDER=openai ./run_all.sh
 ```
+
+## Reranker 说明
+
+`run_all.sh` 已支持可选 reranker 配置，默认开启（`ENABLE_RERANKER=1`）。  
+当开启并使用 `RERANKER_PROVIDER=llm_reranker` 时，脚本会把 reranker 配置写入运行时 `mem0_config.runtime.json`，并在 Stage2 搜索时通过环境变量注入 `OPENAI_BASE_URL/OPENAI_API_KEY` 给 reranker 使用。
+
+说明：
+
+- 如果你当前还没有部署 reranker 服务，可临时关闭：`ENABLE_RERANKER=0 ./run_all.sh`。
+- 如果 `ENABLE_RERANKER=1` 但对应服务未就绪，Stage2 可能出现 rerank 失败并回退原始检索结果（由 mem0 内部处理）。
 
 ## Token Cost 汇总工具
 

@@ -10,10 +10,10 @@
 #   TIMEOUT_SECONDS, CHAT_PROMPT, EMBEDDING_INPUT
 set -euo pipefail
 
-LLM_BASE_URL="${LLM_BASE_URL:-http://10.46.131.226:8000/v1}"
-EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.46.131.226:8001/v1}"
-LLM_MODEL="${LLM_MODEL:-qwen3.5-0.8b}"
-EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-0.6b}"
+LLM_BASE_URL="${LLM_BASE_URL:-http://10.0.2.68:8000/v1}"
+EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.0.2.68:8001/v1}"
+LLM_MODEL="${LLM_MODEL:-qwen3.5-9b}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-8b}"
 API_KEY="${API_KEY:-EMPTY}"
 
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-20}"
@@ -27,20 +27,9 @@ extract_host() {
 
 LLM_HOST="$(extract_host "${LLM_BASE_URL}")"
 EMBEDDING_HOST="$(extract_host "${EMBEDDING_BASE_URL}")"
-NO_PROXY_HOSTS="${LLM_HOST},${EMBEDDING_HOST},127.0.0.1,localhost"
 
 CURL_PREFIX=(
-  env
-  -u http_proxy
-  -u https_proxy
-  -u HTTP_PROXY
-  -u HTTPS_PROXY
-  -u ALL_PROXY
-  -u all_proxy
-  "NO_PROXY=${NO_PROXY_HOSTS}"
-  "no_proxy=${NO_PROXY_HOSTS}"
   curl
-  --noproxy "*"
   --connect-timeout "${TIMEOUT_SECONDS}"
   --max-time "${TIMEOUT_SECONDS}"
   -sS
@@ -131,7 +120,6 @@ echo "LLM base URL      : ${LLM_BASE_URL}"
 echo "Embedding base URL: ${EMBEDDING_BASE_URL}"
 echo "LLM model         : ${LLM_MODEL}"
 echo "Embedding model   : ${EMBEDDING_MODEL}"
-echo "NO_PROXY          : ${NO_PROXY_HOSTS}"
 echo
 
 run_json_check "LLM /models" "GET" "${LLM_MODELS_URL}"

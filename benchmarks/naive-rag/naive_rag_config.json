@@ -10,6 +10,6 @@
     "retriever_dim": 1024,
     "embedding_kwargs": {
         "api_key": "EMPTY",
-        "base_url": "http://10.46.131.226:8001/v1"
+        "base_url": "http://10.0.2.68:8001/v1"
     }
 }

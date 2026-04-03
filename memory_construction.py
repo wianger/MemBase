@@ -91,6 +91,12 @@ if __name__ == "__main__":
         help="The path to the tokenizer (only for backbone model)."
     )
     parser.add_argument(
+        "--embedding-tokenizer-path",
+        type=str,
+        default=None,
+        help="The path to the tokenizer used for embedding model token counting.",
+    )
+    parser.add_argument(
         "--no-strict",
         action="store_true",
         help=(
@@ -145,6 +151,7 @@ if __name__ == "__main__":
         start_idx=args.start_idx,
         end_idx=args.end_idx,
         tokenizer_path=args.tokenizer_path,
+        embedding_tokenizer_path=args.embedding_tokenizer_path,
         message_preprocessor=message_preprocessor,
         sample_filter=sample_filter,
     )

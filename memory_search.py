@@ -97,6 +97,12 @@ if __name__ == "__main__":
         default=None,
         help="Tokenizer model/path used for token counting registration.",
     )
+    parser.add_argument(
+        "--embedding-tokenizer-path",
+        type=str,
+        default=None,
+        help="Tokenizer model/path used for embedding token counting registration.",
+    )
     args = parser.parse_args()
 
     question_filter = None
@@ -116,6 +122,7 @@ if __name__ == "__main__":
         strict=args.strict,
         token_cost_save_filename=args.token_cost_save_filename,
         tokenizer_path=args.tokenizer_path,
+        embedding_tokenizer_path=args.embedding_tokenizer_path,
         question_filter=question_filter,
     )
     SearchRunner(runner_config).run()

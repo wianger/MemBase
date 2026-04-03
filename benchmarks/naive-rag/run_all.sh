@@ -11,6 +11,7 @@
 #   DATASET_PATH, NUM_WORKERS, TOP_K, QA_BATCH_SIZE, JUDGE_BATCH_SIZE, SAMPLE_SIZE
 #   EMBEDDING_DIM (optional; skips auto-detection if set)
 #   TOKENIZER_PATH (optional; if unset, prefer <repo_root>/models/<LLM_MODEL>, else fallback to LLM_MODEL)
+#   EMBEDDING_TOKENIZER_PATH (optional; if unset, prefer <repo_root>/models/<EMBEDDING_MODEL>, else fallback to EMBEDDING_MODEL)
 #   HF_HUB_OFFLINE (defaults to 1 to avoid tokenizer download/network timeout)
 #   LITELLM_LOCAL_MODEL_COST_MAP (defaults to true to avoid remote cost-map fetch noise)
 #   NOTE: if SAMPLE_SIZE is unset/empty, run on full dataset.
@@ -22,21 +23,22 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ==========================
 # Defaults (override by env)
 # ==========================
-LLM_BASE_URL="${LLM_BASE_URL:-http://10.46.131.226:8000/v1}"
-EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.46.131.226:8001/v1}"
-LLM_MODEL="${LLM_MODEL:-qwen3.5-0.8b}"
-EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-0.6b}"
+LLM_BASE_URL="${LLM_BASE_URL:-http://10.0.2.68:8000/v1}"
+EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.0.2.68:8001/v1}"
+LLM_MODEL="${LLM_MODEL:-qwen3.5-9b}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-8b}"
 API_KEY="${API_KEY:-EMPTY}"
 
 DATASET_PATH="${DATASET_PATH:-${REPO_ROOT}/datasets/locomo/data/locomo10.json}"
-NUM_WORKERS="${NUM_WORKERS:-8}"
+NUM_WORKERS="${NUM_WORKERS:-16}"
 TOP_K="${TOP_K:-10}"
-QA_BATCH_SIZE="${QA_BATCH_SIZE:-4}"
-JUDGE_BATCH_SIZE="${JUDGE_BATCH_SIZE:-4}"
+QA_BATCH_SIZE="${QA_BATCH_SIZE:-16}"
+JUDGE_BATCH_SIZE="${JUDGE_BATCH_SIZE:-16}"
 SAMPLE_SIZE="${SAMPLE_SIZE:-}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-}"
+EMBEDDING_TOKENIZER_PATH="${EMBEDDING_TOKENIZER_PATH:-}"
 HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
-LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-true}"
+LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-false}"
 
 # If TOKENIZER_PATH is not explicitly provided, prefer local model files under
 # <repo_root>/models/<llm_model>. Fallback to model name for litellm/tiktoken.
@@ -49,13 +51,24 @@ if [[ -z "${TOKENIZER_PATH}" ]]; then
   fi
 fi
 
+# If EMBEDDING_TOKENIZER_PATH is not explicitly provided, prefer local model files under
+# <repo_root>/models/<embedding_model>. Fallback to model name.
+if [[ -z "${EMBEDDING_TOKENIZER_PATH}" ]]; then
+  LOCAL_EMBEDDING_TOKENIZER_PATH="${REPO_ROOT}/models/${EMBEDDING_MODEL}"
+  if [[ -d "${LOCAL_EMBEDDING_TOKENIZER_PATH}" ]]; then
+    EMBEDDING_TOKENIZER_PATH="${LOCAL_EMBEDDING_TOKENIZER_PATH}"
+  else
+    EMBEDDING_TOKENIZER_PATH="${EMBEDDING_MODEL}"
+  fi
+fi
+
 SAVE_DIR_REL="benchmarks/naive-rag/output"
 SAVE_DIR_ABS="${REPO_ROOT}/${SAVE_DIR_REL}"
 RUN_DIR="${SCRIPT_DIR}/.run"
 RUNTIME_CONFIG="${RUN_DIR}/naive_rag_config.runtime.json"
 RUNTIME_API_CONFIG="${RUN_DIR}/api_config.runtime.json"
 
-NO_PROXY_HOSTS="10.46.131.226,127.0.0.1,localhost"
+NO_PROXY_HOSTS="10.0.2.68,127.0.0.1,localhost"
 PYTHON_ENV_PREFIX=(
   env
   -u http_proxy
@@ -78,6 +91,7 @@ echo "==> Dataset: ${DATASET_PATH}"
 echo "==> LLM endpoint/model: ${LLM_BASE_URL} / ${LLM_MODEL}"
 echo "==> Embedding endpoint/model: ${EMBEDDING_BASE_URL} / ${EMBEDDING_MODEL}"
 echo "==> Tokenizer path: ${TOKENIZER_PATH}"
+echo "==> Embedding tokenizer path: ${EMBEDDING_TOKENIZER_PATH}"
 echo "==> HF_HUB_OFFLINE: ${HF_HUB_OFFLINE}"
 echo "==> LITELLM_LOCAL_MODEL_COST_MAP: ${LITELLM_LOCAL_MODEL_COST_MAP}"
 echo
@@ -244,6 +258,7 @@ STAGE1_CMD=(
   --sample-size "${EFFECTIVE_SAMPLE_SIZE}"
   --num-workers "${NUM_WORKERS}"
   --tokenizer-path "${TOKENIZER_PATH}"
+  --embedding-tokenizer-path "${EMBEDDING_TOKENIZER_PATH}"
   --token-cost-save-filename "${SAVE_DIR_ABS}/token_cost_naive_rag"
 )
 (
@@ -282,6 +297,7 @@ STAGE2_CMD=(
   --end-idx "${END_IDX}"
   --token-cost-save-filename "${SAVE_DIR_ABS}/token_cost_naive_rag"
   --tokenizer-path "${TOKENIZER_PATH}"
+  --embedding-tokenizer-path "${EMBEDDING_TOKENIZER_PATH}"
 )
 (
   cd "${REPO_ROOT}" && \

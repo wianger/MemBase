@@ -9,6 +9,13 @@
 # Public environment overrides:
 #   LLM_BASE_URL, EMBEDDING_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, API_KEY
 #   EMBEDDER_PROVIDER (default lmstudio; optional openai)
+#   ENABLE_RERANKER (default 1)
+#   RERANKER_PROVIDER (default llm_reranker)
+#   RERANKER_MODEL (default qwen3-reranker-8b)
+#   RERANKER_LLM_PROVIDER (default openai; only for llm_reranker)
+#   RERANKER_BASE_URL (default LLM_BASE_URL; only for llm_reranker + openai)
+#   RERANKER_API_KEY (default API_KEY)
+#   RERANKER_TOP_K (default TOP_K)
 #   DATASET_PATH, NUM_WORKERS, TOP_K, QA_BATCH_SIZE, JUDGE_BATCH_SIZE, SAMPLE_SIZE
 #   EMBEDDING_DIM (optional; skips auto-detection if set)
 #   TOKENIZER_PATH (optional; if unset, prefer <repo_root>/models/<LLM_MODEL>, else fallback to LLM_MODEL)
@@ -35,6 +42,13 @@ NUM_WORKERS="${NUM_WORKERS:-8}"
 TOP_K="${TOP_K:-10}"
 QA_BATCH_SIZE="${QA_BATCH_SIZE:-4}"
 JUDGE_BATCH_SIZE="${JUDGE_BATCH_SIZE:-4}"
+ENABLE_RERANKER="${ENABLE_RERANKER:-1}"
+RERANKER_PROVIDER="${RERANKER_PROVIDER:-llm_reranker}"
+RERANKER_MODEL="${RERANKER_MODEL:-qwen3-reranker-8b}"
+RERANKER_LLM_PROVIDER="${RERANKER_LLM_PROVIDER:-openai}"
+RERANKER_BASE_URL="${RERANKER_BASE_URL:-${LLM_BASE_URL}}"
+RERANKER_API_KEY="${RERANKER_API_KEY:-${API_KEY}}"
+RERANKER_TOP_K="${RERANKER_TOP_K:-${TOP_K}}"
 SAMPLE_SIZE="${SAMPLE_SIZE:-}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-}"
 HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
@@ -57,17 +71,8 @@ RUN_DIR="${SCRIPT_DIR}/.run"
 RUNTIME_CONFIG="${RUN_DIR}/mem0_config.runtime.json"
 RUNTIME_API_CONFIG="${RUN_DIR}/api_config.runtime.json"
 
-NO_PROXY_HOSTS="10.46.131.226,127.0.0.1,localhost"
 PYTHON_ENV_PREFIX=(
   env
-  -u http_proxy
-  -u https_proxy
-  -u HTTP_PROXY
-  -u HTTPS_PROXY
-  -u ALL_PROXY
-  -u all_proxy
-  "NO_PROXY=${NO_PROXY_HOSTS}"
-  "no_proxy=${NO_PROXY_HOSTS}"
   "HF_HUB_OFFLINE=${HF_HUB_OFFLINE}"
   "LITELLM_LOCAL_MODEL_COST_MAP=${LITELLM_LOCAL_MODEL_COST_MAP}"
 )
@@ -80,6 +85,15 @@ echo "==> Dataset: ${DATASET_PATH}"
 echo "==> LLM endpoint/model: ${LLM_BASE_URL} / ${LLM_MODEL}"
 echo "==> Embedding endpoint/model: ${EMBEDDING_BASE_URL} / ${EMBEDDING_MODEL}"
 echo "==> Embedder provider: ${EMBEDDER_PROVIDER}"
+if [[ "${ENABLE_RERANKER}" == "1" ]]; then
+  echo "==> Reranker: enabled (${RERANKER_PROVIDER})"
+  echo "==> Reranker model/top-k: ${RERANKER_MODEL} / ${RERANKER_TOP_K}"
+  if [[ "${RERANKER_PROVIDER}" == "llm_reranker" ]]; then
+    echo "==> Reranker LLM provider/base URL: ${RERANKER_LLM_PROVIDER} / ${RERANKER_BASE_URL}"
+  fi
+else
+  echo "==> Reranker: disabled"
+fi
 echo "==> Tokenizer path: ${TOKENIZER_PATH}"
 echo "==> HF_HUB_OFFLINE: ${HF_HUB_OFFLINE}"
 echo "==> LITELLM_LOCAL_MODEL_COST_MAP: ${LITELLM_LOCAL_MODEL_COST_MAP}"
@@ -98,6 +112,35 @@ fi
 if [[ -n "${SAMPLE_SIZE}" ]] && [[ "${SAMPLE_SIZE}" -le 0 ]]; then
   echo "ERROR: SAMPLE_SIZE must be > 0 when provided, got: ${SAMPLE_SIZE}"
   exit 1
+fi
+
+if [[ "${ENABLE_RERANKER}" != "0" && "${ENABLE_RERANKER}" != "1" ]]; then
+  echo "ERROR: ENABLE_RERANKER must be 0 or 1, got: ${ENABLE_RERANKER}"
+  exit 1
+fi
+
+if [[ "${ENABLE_RERANKER}" == "1" ]]; then
+  case "${RERANKER_PROVIDER}" in
+    cohere|sentence_transformer|zero_entropy|llm_reranker|huggingface)
+      ;;
+    *)
+      echo "ERROR: unsupported RERANKER_PROVIDER: ${RERANKER_PROVIDER}"
+      echo "       Supported values: cohere, sentence_transformer, zero_entropy, llm_reranker, huggingface"
+      exit 1
+      ;;
+  esac
+
+  if ! [[ "${RERANKER_TOP_K}" =~ ^[0-9]+$ ]] || [[ "${RERANKER_TOP_K}" -le 0 ]]; then
+    echo "ERROR: RERANKER_TOP_K must be a positive integer, got: ${RERANKER_TOP_K}"
+    exit 1
+  fi
+
+  # mem0ai's llm_reranker + openai provider reads base URL from OPENAI_BASE_URL env.
+  if [[ "${RERANKER_PROVIDER}" == "llm_reranker" ]] && [[ "${RERANKER_LLM_PROVIDER}" != "openai" ]]; then
+    echo "ERROR: in this script, llm_reranker currently only supports RERANKER_LLM_PROVIDER=openai."
+    echo "       got RERANKER_LLM_PROVIDER=${RERANKER_LLM_PROVIDER}"
+    exit 1
+  fi
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
@@ -235,6 +278,37 @@ EOF
     ;;
 esac
 
+RERANKER_PROVIDER_JSON="null"
+RERANKER_CONFIG_JSON="{}"
+if [[ "${ENABLE_RERANKER}" == "1" ]]; then
+  RERANKER_PROVIDER_JSON="\"${RERANKER_PROVIDER}\""
+  case "${RERANKER_PROVIDER}" in
+    llm_reranker)
+      RERANKER_CONFIG_JSON="$(cat <<EOF
+{
+        "provider": "${RERANKER_LLM_PROVIDER}",
+        "model": "${RERANKER_MODEL}",
+        "api_key": "${RERANKER_API_KEY}",
+        "top_k": ${RERANKER_TOP_K},
+        "temperature": 0.0,
+        "max_tokens": 64
+    }
+EOF
+)"
+      ;;
+    *)
+      RERANKER_CONFIG_JSON="$(cat <<EOF
+{
+        "model": "${RERANKER_MODEL}",
+        "api_key": "${RERANKER_API_KEY}",
+        "top_k": ${RERANKER_TOP_K}
+    }
+EOF
+)"
+      ;;
+  esac
+fi
+
 cat > "${RUNTIME_CONFIG}" <<EOF
 {
     "user_id": "guest",
@@ -250,6 +324,8 @@ cat > "${RUNTIME_CONFIG}" <<EOF
     "embedding_model": "${EMBEDDING_MODEL}",
     "embedding_model_dims": ${EFFECTIVE_EMBEDDING_DIM},
     "embedding_config": ${EMBEDDING_CONFIG_JSON},
+    "reranker_provider": ${RERANKER_PROVIDER_JSON},
+    "reranker_config": ${RERANKER_CONFIG_JSON},
     "graph_store_provider": "kuzu",
     "graph_store_config": {}
 }
@@ -294,7 +370,16 @@ END_IDX="${EFFECTIVE_SAMPLE_SIZE}"
 
 echo "==> [5/7] Stage 2 - memory search"
 STAGE2_CMD=(
-  "${PYTHON_ENV_PREFIX[@]}" uv run --project "${SCRIPT_DIR}" python memory_search.py
+  "${PYTHON_ENV_PREFIX[@]}"
+)
+if [[ "${ENABLE_RERANKER}" == "1" ]] && [[ "${RERANKER_PROVIDER}" == "llm_reranker" ]]; then
+  STAGE2_CMD+=(
+    "OPENAI_BASE_URL=${RERANKER_BASE_URL}"
+    "OPENAI_API_KEY=${RERANKER_API_KEY}"
+  )
+fi
+STAGE2_CMD+=(
+  uv run --project "${SCRIPT_DIR}" python memory_search.py
   --memory-type "Mem0"
   --dataset-type "LoCoMo"
   --dataset-path "${STAGE1_DATASET}"

@@ -227,6 +227,10 @@ class ConstructionRunnerConfig(BaseModel):
         default=None,
         description="The path to the tokenizer (only for backbone model).",
     )
+    embedding_tokenizer_path: str | None = Field(
+        default=None,
+        description="The path to the tokenizer used for embedding model token counting.",
+    )
     message_preprocessor: Callable[[Message], Message] | None = Field(
         default=None,
         description=(
@@ -307,6 +311,10 @@ class ConstructionRunner:
             tokenizer = get_tokenizer_for_model(cfg.tokenizer_path)
         else:
             tokenizer = None
+        if cfg.embedding_tokenizer_path is not None:
+            embedding_tokenizer = get_tokenizer_for_model(cfg.embedding_tokenizer_path)
+        else:
+            embedding_tokenizer = None
 
         for llm_model in llm_models:
             state = token_cost.get(llm_model)
@@ -331,8 +339,11 @@ class ConstructionRunner:
                     f"There is a saved checkpoint 📁 for monitoring the token consumption of embedding model "
                     f"{embedding_model} 🧠. It will be loaded into `CostStateManager`."
                 )
-            # Embedding token accounting does not require chat tokenizer registration here.
-            CostStateManager.register(embedding_model, state=state, tokenizer=None)
+            CostStateManager.register(
+                embedding_model,
+                state=state,
+                tokenizer=embedding_tokenizer,
+            )
         if len(embedding_models) > 0:
             print(
                 f"The embedding model(s) 🧠 being used are {', '.join(embedding_models)}. "
