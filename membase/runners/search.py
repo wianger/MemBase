@@ -289,14 +289,24 @@ class SearchRunner:
         if start_idx >= end_idx:
             raise ValueError("The starting index must be less than the ending index.")
 
-        # Register embedding models for token accounting when enabled.
+        # Register existing token-cost states and embedding models when enabled.
         if cfg.token_cost_save_filename is not None:
-            dummy_config = CONFIG_MAPPING[cfg.memory_type](**config)
-            embedding_models = dummy_config.get_embedding_models()
             if cfg.tokenizer_path is not None:
                 tokenizer = get_tokenizer_for_model(cfg.tokenizer_path)
             else:
                 tokenizer = None
+
+            # Preserve previously collected states (e.g., Stage 1 construction stats).
+            for model, state in token_cost.items():
+                CostStateManager.register(
+                    model,
+                    state=state,
+                    tokenizer=tokenizer,
+                    exist_ok=True,
+                )
+
+            dummy_config = CONFIG_MAPPING[cfg.memory_type](**config)
+            embedding_models = dummy_config.get_embedding_models()
             for embedding_model in embedding_models:
                 state = token_cost.get(embedding_model)
                 CostStateManager.register(

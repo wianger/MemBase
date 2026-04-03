@@ -1,0 +1,16 @@
+[project]
+name = "membase-mem0-benchmark"
+version = "0.1.0"
+description = "Standalone uv environment for MemBase Mem0 benchmark"
+requires-python = ">=3.12"
+dependencies = [
+    "mem0ai==1.0.5",
+    "kuzu==0.11.3",
+    "rank-bm25==0.2.2",
+    "litellm==1.75.9",
+    "openai>=1.0.0,<3.0.0",
+    "tiktoken>=0.7.0",
+    "tqdm==4.67.1",
+    "pydantic==2.11.10",
+    "nltk==3.9.2",
+]
