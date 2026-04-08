@@ -4,7 +4,7 @@
     "llm_provider": "openai",
     "llm_model": "qwen3.5-0.8b",
     "llm_config": {
-        "openai_base_url": "http://10.46.131.226:8000/v1",
+        "openai_base_url": "http://10.77.110.187:8000/v1",
         "api_key": "EMPTY",
         "temperature": 0.0
     },
@@ -12,7 +12,7 @@
     "embedding_model": "qwen3-embedding-0.6b",
     "embedding_model_dims": 1024,
     "embedding_config": {
-        "lmstudio_base_url": "http://10.46.131.226:8001/v1",
+        "lmstudio_base_url": "http://10.77.110.187:8001/v1",
         "api_key": "EMPTY"
     },
     "graph_store_provider": "kuzu",

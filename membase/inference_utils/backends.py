@@ -332,14 +332,17 @@ class OpenAIClientPool:
             batch_clients = self.client_pool[0: len(batch_messages_list)]
             if len(batch_clients) == 1:
                 client = batch_clients[0]
-                outputs.append(
-                    client.get_text_generation_output(
-                        batch_messages_list[0], 
-                        model=self.model, 
-                        post_processor=post_processor, 
-                        **kwargs
+                # Even with one client, process all messages sequentially in this chunk.
+                # This avoids dropping items when caller batch_size > 1.
+                for messages in batch_messages_list:
+                    outputs.append(
+                        client.get_text_generation_output(
+                            messages, 
+                            model=self.model, 
+                            post_processor=post_processor, 
+                            **kwargs
+                        )
                     )
-                ) 
             else:
                 outputs.extend(
                     openai_api_batch_inference(

@@ -47,7 +47,13 @@ cd benchmarks/mem0
 - `EMBEDDING_BASE_URL`（默认 `http://10.46.131.226:8001/v1`）
 - `LLM_MODEL`（默认 `qwen3.5-0.8b`）
 - `EMBEDDING_MODEL`（默认 `qwen3-embedding-0.6b`）
+- `LLM_API_POOL_SIZE`（默认 `16`；Stage3 QA/Judge 的 OpenAI client pool 大小，决定真实并发上限）
 - `EMBEDDER_PROVIDER`（默认 `lmstudio`，可选 `openai`）
+- `STRICT_UPDATE_PROMPT`（默认 `1`；启用更严格的 `custom_update_memory_prompt`，强约束 UPDATE/DELETE/NONE 的 `id` 必须来自候选列表）
+- `CUSTOM_UPDATE_MEMORY_PROMPT`（可选；自定义覆盖 update prompt。若设置则优先于 `STRICT_UPDATE_PROMPT`）
+- `STRICT_GRAPH_PROMPT`（默认 `1`；启用更严格的 graph relation prompt，要求每条关系都返回 `source/relationship/destination`）
+- `CUSTOM_GRAPH_PROMPT`（可选；自定义覆盖 graph relation prompt。若设置则优先于 `STRICT_GRAPH_PROMPT`）
+- `GRAPH_THRESHOLD`（可选；图谱节点匹配阈值，范围 `[0,1]`）
 - `ENABLE_RERANKER`（默认 `1`，设为 `0` 关闭）
 - `RERANKER_PROVIDER`（默认 `llm_reranker`）
 - `RERANKER_MODEL`（默认 `qwen3-reranker-8b`）
@@ -90,6 +96,60 @@ SAMPLE_SIZE=5 \
 ```bash
 cd benchmarks/mem0
 NUM_WORKERS=8 ./run_all.sh
+```
+
+评测阶段真实并发 16 示例（不是只调 batch）：
+
+```bash
+cd benchmarks/mem0
+LLM_API_POOL_SIZE=16 \
+QA_BATCH_SIZE=16 \
+JUDGE_BATCH_SIZE=16 \
+./run_all.sh
+```
+
+启用默认严格 update prompt（默认即开启）：
+
+```bash
+cd benchmarks/mem0
+STRICT_UPDATE_PROMPT=1 ./run_all.sh
+```
+
+关闭严格 update prompt（回退 Mem0 内置 prompt）：
+
+```bash
+cd benchmarks/mem0
+STRICT_UPDATE_PROMPT=0 ./run_all.sh
+```
+
+自定义 update prompt（优先级高于 `STRICT_UPDATE_PROMPT`）：
+
+```bash
+cd benchmarks/mem0
+CUSTOM_UPDATE_MEMORY_PROMPT='You are a strict memory manager. For UPDATE/DELETE/NONE, id must be copied from candidate IDs only. For ADD use id NEW. Return JSON only.' \
+./run_all.sh
+```
+
+启用默认严格 graph prompt（默认即开启）：
+
+```bash
+cd benchmarks/mem0
+STRICT_GRAPH_PROMPT=1 ./run_all.sh
+```
+
+自定义 graph prompt（优先级高于 `STRICT_GRAPH_PROMPT`）：
+
+```bash
+cd benchmarks/mem0
+CUSTOM_GRAPH_PROMPT='For every relation item, always include source, relationship, destination. relationship cannot be empty. Drop any item that misses required fields.' \
+./run_all.sh
+```
+
+调整图谱节点匹配阈值示例：
+
+```bash
+cd benchmarks/mem0
+GRAPH_THRESHOLD=0.8 ./run_all.sh
 ```
 
 开启 reranker（使用 `qwen3-reranker-8b`）示例：
@@ -155,6 +215,25 @@ EMBEDDER_PROVIDER=openai ./run_all.sh
 
 - 如果你当前还没有部署 reranker 服务，可临时关闭：`ENABLE_RERANKER=0 ./run_all.sh`。
 - 如果 `ENABLE_RERANKER=1` 但对应服务未就绪，Stage2 可能出现 rerank 失败并回退原始检索结果（由 mem0 内部处理）。
+
+## Mem0 更新 ID 约束说明
+
+`run_all.sh` 会在运行时配置中写入 `custom_update_memory_prompt`（默认开启）来强化以下约束：
+
+- 对 `UPDATE` / `DELETE` / `NONE`，`id` 必须来自当前候选记忆列表，禁止编造 ID。
+- 若无法可靠匹配候选 ID，不应强行 UPDATE/DELETE；新事实使用 `ADD`，并使用 `id="NEW"`。
+- 返回必须是严格 JSON（无额外解释文本）。
+
+这可以明显降低模型在 update 阶段返回非法 `id` 的概率，并与仓库中的 sanitizer 形成双保险。
+
+## Mem0 图谱关系约束说明
+
+`run_all.sh` 也会默认写入 `graph_store_custom_prompt`，强化关系抽取阶段的结构约束：
+
+- 每个关系项必须包含 `source`、`relationship`、`destination`。
+- `relationship` 不能为空；缺失字段的关系项会被丢弃。
+
+在运行时，封装层会过滤不完整关系项（例如缺 `relationship` 的项会直接丢弃），避免 `KeyError: 'relationship'`。
 
 ## Token Cost 汇总工具
 

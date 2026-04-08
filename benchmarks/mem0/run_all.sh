@@ -8,7 +8,13 @@
 #
 # Public environment overrides:
 #   LLM_BASE_URL, EMBEDDING_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, API_KEY
+#   LLM_API_POOL_SIZE (default 16; OpenAI client pool size for Stage3 parallel requests)
 #   EMBEDDER_PROVIDER (default lmstudio; optional openai)
+#   STRICT_UPDATE_PROMPT (default 1; inject hardened custom_update_memory_prompt)
+#   CUSTOM_UPDATE_MEMORY_PROMPT (optional; overrides built-in strict prompt)
+#   STRICT_GRAPH_PROMPT (default 1; inject hardened graph relation extraction prompt)
+#   CUSTOM_GRAPH_PROMPT (optional; overrides built-in strict graph prompt)
+#   GRAPH_THRESHOLD (optional; graph node matching threshold in [0,1])
 #   ENABLE_RERANKER (default 1)
 #   RERANKER_PROVIDER (default llm_reranker)
 #   RERANKER_MODEL (default qwen3-reranker-8b)
@@ -19,6 +25,7 @@
 #   DATASET_PATH, NUM_WORKERS, TOP_K, QA_BATCH_SIZE, JUDGE_BATCH_SIZE, SAMPLE_SIZE
 #   EMBEDDING_DIM (optional; skips auto-detection if set)
 #   TOKENIZER_PATH (optional; if unset, prefer <repo_root>/models/<LLM_MODEL>, else fallback to LLM_MODEL)
+#   EMBEDDING_TOKENIZER_PATH (optional; if unset, prefer <repo_root>/models/<EMBEDDING_MODEL>, else fallback to EMBEDDING_MODEL)
 #   HF_HUB_OFFLINE (defaults to 1 to avoid tokenizer download/network timeout)
 #   LITELLM_LOCAL_MODEL_COST_MAP (defaults to true to avoid remote cost-map fetch noise)
 #   NOTE: if SAMPLE_SIZE is unset/empty, run on full dataset.
@@ -30,18 +37,24 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ==========================
 # Defaults (override by env)
 # ==========================
-LLM_BASE_URL="${LLM_BASE_URL:-http://10.46.131.226:8000/v1}"
-EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.46.131.226:8001/v1}"
-LLM_MODEL="${LLM_MODEL:-qwen3.5-0.8b}"
-EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-0.6b}"
+LLM_BASE_URL="${LLM_BASE_URL:-http://10.77.110.187:8000/v1}"
+EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.77.110.187:8001/v1}"
+LLM_MODEL="${LLM_MODEL:-qwen3.5-9b}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-8b}"
 API_KEY="${API_KEY:-EMPTY}"
+LLM_API_POOL_SIZE="${LLM_API_POOL_SIZE:-16}"
 EMBEDDER_PROVIDER="${EMBEDDER_PROVIDER:-lmstudio}"
+STRICT_UPDATE_PROMPT="${STRICT_UPDATE_PROMPT:-1}"
+CUSTOM_UPDATE_MEMORY_PROMPT="${CUSTOM_UPDATE_MEMORY_PROMPT:-}"
+STRICT_GRAPH_PROMPT="${STRICT_GRAPH_PROMPT:-1}"
+CUSTOM_GRAPH_PROMPT="${CUSTOM_GRAPH_PROMPT:-}"
+GRAPH_THRESHOLD="${GRAPH_THRESHOLD:-}"
 
 DATASET_PATH="${DATASET_PATH:-${REPO_ROOT}/datasets/locomo/data/locomo10.json}"
-NUM_WORKERS="${NUM_WORKERS:-8}"
+NUM_WORKERS="${NUM_WORKERS:-16}"
 TOP_K="${TOP_K:-10}"
-QA_BATCH_SIZE="${QA_BATCH_SIZE:-4}"
-JUDGE_BATCH_SIZE="${JUDGE_BATCH_SIZE:-4}"
+QA_BATCH_SIZE="${QA_BATCH_SIZE:-16}"
+JUDGE_BATCH_SIZE="${JUDGE_BATCH_SIZE:-16}"
 ENABLE_RERANKER="${ENABLE_RERANKER:-1}"
 RERANKER_PROVIDER="${RERANKER_PROVIDER:-llm_reranker}"
 RERANKER_MODEL="${RERANKER_MODEL:-qwen3-reranker-8b}"
@@ -51,6 +64,7 @@ RERANKER_API_KEY="${RERANKER_API_KEY:-${API_KEY}}"
 RERANKER_TOP_K="${RERANKER_TOP_K:-${TOP_K}}"
 SAMPLE_SIZE="${SAMPLE_SIZE:-}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-}"
+EMBEDDING_TOKENIZER_PATH="${EMBEDDING_TOKENIZER_PATH:-}"
 HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-true}"
 
@@ -65,14 +79,48 @@ if [[ -z "${TOKENIZER_PATH}" ]]; then
   fi
 fi
 
+# If EMBEDDING_TOKENIZER_PATH is not explicitly provided, prefer local model files under
+# <repo_root>/models/<embedding_model>. Fallback to model name.
+if [[ -z "${EMBEDDING_TOKENIZER_PATH}" ]]; then
+  LOCAL_EMBEDDING_TOKENIZER_PATH="${REPO_ROOT}/models/${EMBEDDING_MODEL}"
+  if [[ -d "${LOCAL_EMBEDDING_TOKENIZER_PATH}" ]]; then
+    EMBEDDING_TOKENIZER_PATH="${LOCAL_EMBEDDING_TOKENIZER_PATH}"
+  else
+    EMBEDDING_TOKENIZER_PATH="${EMBEDDING_MODEL}"
+  fi
+fi
+
 SAVE_DIR_REL="benchmarks/mem0/output"
 SAVE_DIR_ABS="${REPO_ROOT}/${SAVE_DIR_REL}"
 RUN_DIR="${SCRIPT_DIR}/.run"
 RUNTIME_CONFIG="${RUN_DIR}/mem0_config.runtime.json"
 RUNTIME_API_CONFIG="${RUN_DIR}/api_config.runtime.json"
 
+extract_host() {
+  local url="$1"
+  echo "${url}" | sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#'
+}
+
+LLM_HOST="$(extract_host "${LLM_BASE_URL}")"
+EMBEDDING_HOST="$(extract_host "${EMBEDDING_BASE_URL}")"
+NO_PROXY_HOSTS="127.0.0.1,localhost,10.77.110.187"
+if [[ -n "${LLM_HOST}" ]]; then
+  NO_PROXY_HOSTS="${LLM_HOST},${NO_PROXY_HOSTS}"
+fi
+if [[ -n "${EMBEDDING_HOST}" ]]; then
+  NO_PROXY_HOSTS="${EMBEDDING_HOST},${NO_PROXY_HOSTS}"
+fi
+
 PYTHON_ENV_PREFIX=(
   env
+  -u http_proxy
+  -u https_proxy
+  -u HTTP_PROXY
+  -u HTTPS_PROXY
+  -u ALL_PROXY
+  -u all_proxy
+  "NO_PROXY=${NO_PROXY_HOSTS}"
+  "no_proxy=${NO_PROXY_HOSTS}"
   "HF_HUB_OFFLINE=${HF_HUB_OFFLINE}"
   "LITELLM_LOCAL_MODEL_COST_MAP=${LITELLM_LOCAL_MODEL_COST_MAP}"
 )
@@ -95,6 +143,7 @@ else
   echo "==> Reranker: disabled"
 fi
 echo "==> Tokenizer path: ${TOKENIZER_PATH}"
+echo "==> Embedding tokenizer path: ${EMBEDDING_TOKENIZER_PATH}"
 echo "==> HF_HUB_OFFLINE: ${HF_HUB_OFFLINE}"
 echo "==> LITELLM_LOCAL_MODEL_COST_MAP: ${LITELLM_LOCAL_MODEL_COST_MAP}"
 echo
@@ -143,12 +192,34 @@ if [[ "${ENABLE_RERANKER}" == "1" ]]; then
   fi
 fi
 
+if ! [[ "${LLM_API_POOL_SIZE}" =~ ^[0-9]+$ ]] || [[ "${LLM_API_POOL_SIZE}" -le 0 ]]; then
+  echo "ERROR: LLM_API_POOL_SIZE must be a positive integer, got: ${LLM_API_POOL_SIZE}"
+  exit 1
+fi
+
+if [[ "${STRICT_UPDATE_PROMPT}" != "0" && "${STRICT_UPDATE_PROMPT}" != "1" ]]; then
+  echo "ERROR: STRICT_UPDATE_PROMPT must be 0 or 1, got: ${STRICT_UPDATE_PROMPT}"
+  exit 1
+fi
+
+if [[ "${STRICT_GRAPH_PROMPT}" != "0" && "${STRICT_GRAPH_PROMPT}" != "1" ]]; then
+  echo "ERROR: STRICT_GRAPH_PROMPT must be 0 or 1, got: ${STRICT_GRAPH_PROMPT}"
+  exit 1
+fi
+
+if [[ -n "${GRAPH_THRESHOLD}" ]]; then
+  if ! [[ "${GRAPH_THRESHOLD}" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]]; then
+    echo "ERROR: GRAPH_THRESHOLD must be in [0,1], got: ${GRAPH_THRESHOLD}"
+    exit 1
+  fi
+fi
+
 if ! command -v uv >/dev/null 2>&1; then
   echo "ERROR: uv is not installed or not in PATH."
   exit 1
 fi
 
-echo "==> [0/7] Resolve effective sample size"
+echo "==> [0/9] Resolve effective sample size"
 if [[ -n "${SAMPLE_SIZE}" ]]; then
   EFFECTIVE_SAMPLE_SIZE="${SAMPLE_SIZE}"
   echo "Use SAMPLE_SIZE from env: ${EFFECTIVE_SAMPLE_SIZE}"
@@ -200,14 +271,14 @@ PY
 fi
 echo
 
-echo "==> [1/7] uv sync"
+echo "==> [1/9] uv sync"
 (cd "${SCRIPT_DIR}" && uv sync)
 
 if [[ -n "${EMBEDDING_DIM:-}" ]]; then
   EFFECTIVE_EMBEDDING_DIM="${EMBEDDING_DIM}"
-  echo "==> [2/7] Use EMBEDDING_DIM from env: ${EFFECTIVE_EMBEDDING_DIM}"
+  echo "==> [2/9] Use EMBEDDING_DIM from env: ${EFFECTIVE_EMBEDDING_DIM}"
 else
-  echo "==> [2/7] Auto-detect embedding dimension from endpoint"
+  echo "==> [2/9] Auto-detect embedding dimension from endpoint"
   DETECT_OUTPUT="$(
     cd "${SCRIPT_DIR}" && \
     EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL}" \
@@ -217,12 +288,17 @@ else
 import json
 import os
 import sys
+import httpx
 from openai import OpenAI
 
 base_url = os.environ["EMBEDDING_BASE_URL"]
 api_key = os.environ["API_KEY"]
 model = os.environ["EMBEDDING_MODEL"]
-client = OpenAI(base_url=base_url, api_key=api_key)
+client = OpenAI(
+    base_url=base_url,
+    api_key=api_key,
+    http_client=httpx.Client(trust_env=False),
+)
 
 resp = client.embeddings.create(
     model=model,
@@ -250,7 +326,117 @@ PY
   echo "Detected embedding dim: ${EFFECTIVE_EMBEDDING_DIM}"
 fi
 
-echo "==> [3/7] Generate runtime config files (no mutation to baseline files)"
+echo "==> [3/9] Resolve custom update-memory prompt"
+STRICT_UPDATE_MEMORY_PROMPT_DEFAULT="$(cat <<'EOF'
+You are a strict memory manager responsible for returning memory update actions in JSON.
+
+HARD CONSTRAINTS (MUST FOLLOW):
+1) Candidate IDs:
+   - Existing memory IDs are ONLY the IDs shown in the current-memory candidate list.
+   - For event UPDATE / DELETE / NONE, the "id" MUST be copied exactly from that candidate list.
+   - Never invent, renumber, or transform an existing ID.
+
+2) Out-of-list IDs are forbidden:
+   - If an ID is not in the candidate list, you MUST NOT use it for UPDATE/DELETE/NONE.
+   - If you cannot confidently map a fact to a candidate ID, do not force UPDATE/DELETE.
+   - Use ADD for genuinely new facts. For ADD, set "id" to "NEW".
+
+3) UPDATE safety:
+   - For UPDATE, "old_memory" must match the selected candidate memory text.
+   - Keep the same candidate ID when updating.
+
+4) Output format:
+   - Return strict JSON only in the required schema.
+   - "event" must be one of: ADD, UPDATE, DELETE, NONE.
+   - Do not output any explanation text.
+EOF
+)"
+
+if [[ -n "${CUSTOM_UPDATE_MEMORY_PROMPT}" ]]; then
+  EFFECTIVE_CUSTOM_UPDATE_MEMORY_PROMPT="${CUSTOM_UPDATE_MEMORY_PROMPT}"
+  CUSTOM_UPDATE_PROMPT_SOURCE="env:CUSTOM_UPDATE_MEMORY_PROMPT"
+elif [[ "${STRICT_UPDATE_PROMPT}" == "1" ]]; then
+  EFFECTIVE_CUSTOM_UPDATE_MEMORY_PROMPT="${STRICT_UPDATE_MEMORY_PROMPT_DEFAULT}"
+  CUSTOM_UPDATE_PROMPT_SOURCE="built-in strict prompt"
+else
+  EFFECTIVE_CUSTOM_UPDATE_MEMORY_PROMPT=""
+  CUSTOM_UPDATE_PROMPT_SOURCE="disabled"
+fi
+
+if [[ -n "${EFFECTIVE_CUSTOM_UPDATE_MEMORY_PROMPT}" ]]; then
+  CUSTOM_UPDATE_MEMORY_PROMPT_JSON="$(
+    EFFECTIVE_CUSTOM_UPDATE_MEMORY_PROMPT="${EFFECTIVE_CUSTOM_UPDATE_MEMORY_PROMPT}" \
+    python3 - <<'PY'
+import json
+import os
+
+print(json.dumps(os.environ["EFFECTIVE_CUSTOM_UPDATE_MEMORY_PROMPT"], ensure_ascii=False))
+PY
+  )"
+else
+  CUSTOM_UPDATE_MEMORY_PROMPT_JSON="null"
+fi
+
+if [[ "${CUSTOM_UPDATE_MEMORY_PROMPT_JSON}" == "null" ]]; then
+  echo "custom_update_memory_prompt: disabled"
+else
+  echo "custom_update_memory_prompt: enabled (${CUSTOM_UPDATE_PROMPT_SOURCE})"
+fi
+echo
+
+echo "==> [4/9] Resolve graph relation-extraction prompt"
+STRICT_GRAPH_PROMPT_DEFAULT="$(cat <<'EOF'
+Strict relation extraction constraints:
+- For every extracted relation, ALWAYS output all three fields: source, relationship, destination.
+- relationship is REQUIRED and cannot be empty.
+- Use concise snake_case for relationship (e.g., works_at, lives_in, likes).
+- Never omit relationship, never return null relationship, and never use alternative keys such as relation/predicate.
+- Output only items that satisfy the required schema.
+EOF
+)"
+
+if [[ -n "${CUSTOM_GRAPH_PROMPT}" ]]; then
+  EFFECTIVE_GRAPH_PROMPT="${CUSTOM_GRAPH_PROMPT}"
+  GRAPH_PROMPT_SOURCE="env:CUSTOM_GRAPH_PROMPT"
+elif [[ "${STRICT_GRAPH_PROMPT}" == "1" ]]; then
+  EFFECTIVE_GRAPH_PROMPT="${STRICT_GRAPH_PROMPT_DEFAULT}"
+  GRAPH_PROMPT_SOURCE="built-in strict graph prompt"
+else
+  EFFECTIVE_GRAPH_PROMPT=""
+  GRAPH_PROMPT_SOURCE="disabled"
+fi
+
+if [[ -n "${EFFECTIVE_GRAPH_PROMPT}" ]]; then
+  GRAPH_PROMPT_JSON="$(
+    EFFECTIVE_GRAPH_PROMPT="${EFFECTIVE_GRAPH_PROMPT}" \
+    python3 - <<'PY'
+import json
+import os
+
+print(json.dumps(os.environ["EFFECTIVE_GRAPH_PROMPT"], ensure_ascii=False))
+PY
+  )"
+else
+  GRAPH_PROMPT_JSON="null"
+fi
+
+if [[ -n "${GRAPH_THRESHOLD}" ]]; then
+  GRAPH_THRESHOLD_JSON="${GRAPH_THRESHOLD}"
+else
+  GRAPH_THRESHOLD_JSON="null"
+fi
+
+if [[ "${GRAPH_PROMPT_JSON}" == "null" ]]; then
+  echo "graph_store_custom_prompt: disabled"
+else
+  echo "graph_store_custom_prompt: enabled (${GRAPH_PROMPT_SOURCE})"
+fi
+if [[ "${GRAPH_THRESHOLD_JSON}" != "null" ]]; then
+  echo "graph_store_threshold: ${GRAPH_THRESHOLD_JSON}"
+fi
+echo
+
+echo "==> [5/9] Generate runtime config files (no mutation to baseline files)"
 
 case "${EMBEDDER_PROVIDER}" in
   lmstudio)
@@ -324,6 +510,9 @@ cat > "${RUNTIME_CONFIG}" <<EOF
     "embedding_model": "${EMBEDDING_MODEL}",
     "embedding_model_dims": ${EFFECTIVE_EMBEDDING_DIM},
     "embedding_config": ${EMBEDDING_CONFIG_JSON},
+    "custom_update_memory_prompt": ${CUSTOM_UPDATE_MEMORY_PROMPT_JSON},
+    "graph_store_custom_prompt": ${GRAPH_PROMPT_JSON},
+    "graph_store_threshold": ${GRAPH_THRESHOLD_JSON},
     "reranker_provider": ${RERANKER_PROVIDER_JSON},
     "reranker_config": ${RERANKER_CONFIG_JSON},
     "graph_store_provider": "kuzu",
@@ -331,18 +520,43 @@ cat > "${RUNTIME_CONFIG}" <<EOF
 }
 EOF
 
+API_KEYS_JSON="$(
+  API_KEY="${API_KEY}" \
+  LLM_API_POOL_SIZE="${LLM_API_POOL_SIZE}" \
+  python3 - <<'PY'
+import json
+import os
+
+n = int(os.environ["LLM_API_POOL_SIZE"])
+print(json.dumps([os.environ["API_KEY"]] * n, ensure_ascii=False))
+PY
+)"
+
+BASE_URLS_JSON="$(
+  LLM_BASE_URL="${LLM_BASE_URL}" \
+  LLM_API_POOL_SIZE="${LLM_API_POOL_SIZE}" \
+  python3 - <<'PY'
+import json
+import os
+
+n = int(os.environ["LLM_API_POOL_SIZE"])
+print(json.dumps([os.environ["LLM_BASE_URL"]] * n, ensure_ascii=False))
+PY
+)"
+
 cat > "${RUNTIME_API_CONFIG}" <<EOF
 {
-    "api_keys": ["${API_KEY}"],
-    "base_urls": ["${LLM_BASE_URL}"]
+    "api_keys": ${API_KEYS_JSON},
+    "base_urls": ${BASE_URLS_JSON}
 }
 EOF
 
 echo "Runtime config: ${RUNTIME_CONFIG}"
 echo "Runtime api config: ${RUNTIME_API_CONFIG}"
+echo "LLM API pool size (Stage3): ${LLM_API_POOL_SIZE}"
 echo
 
-echo "==> [4/7] Stage 1 - memory construction"
+echo "==> [6/9] Stage 1 - memory construction"
 STAGE1_CMD=(
   "${PYTHON_ENV_PREFIX[@]}" uv run --project "${SCRIPT_DIR}" python memory_construction.py
   --memory-type "Mem0"
@@ -352,6 +566,7 @@ STAGE1_CMD=(
   --sample-size "${EFFECTIVE_SAMPLE_SIZE}"
   --num-workers "${NUM_WORKERS}"
   --tokenizer-path "${TOKENIZER_PATH}"
+  --embedding-tokenizer-path "${EMBEDDING_TOKENIZER_PATH}"
   --token-cost-save-filename "${SAVE_DIR_ABS}/token_cost_mem0"
 )
 (
@@ -368,7 +583,7 @@ fi
 START_IDX=0
 END_IDX="${EFFECTIVE_SAMPLE_SIZE}"
 
-echo "==> [5/7] Stage 2 - memory search"
+echo "==> [7/9] Stage 2 - memory search"
 STAGE2_CMD=(
   "${PYTHON_ENV_PREFIX[@]}"
 )
@@ -390,6 +605,7 @@ STAGE2_CMD+=(
   --start-idx "${START_IDX}"
   --end-idx "${END_IDX}"
   --tokenizer-path "${TOKENIZER_PATH}"
+  --embedding-tokenizer-path "${EMBEDDING_TOKENIZER_PATH}"
   --token-cost-save-filename "${SAVE_DIR_ABS}/token_cost_mem0"
 )
 (
@@ -403,7 +619,7 @@ if [[ ! -f "${SEARCH_RESULTS}" ]]; then
   exit 1
 fi
 
-echo "==> [6/7] Stage 3 - evaluation (metrics: f1 bleu llm_judge)"
+echo "==> [8/9] Stage 3 - evaluation (metrics: f1 bleu llm_judge)"
 STAGE3_CMD=(
   "${PYTHON_ENV_PREFIX[@]}" uv run --project "${SCRIPT_DIR}" python memory_evaluation.py
   --search-results-path "${SEARCH_RESULTS}"
@@ -424,7 +640,7 @@ EVAL_RESULTS="${SEARCH_RESULTS%.json}_evaluation.json"
 TOKEN_COST_JSON="${SAVE_DIR_ABS}/token_cost_mem0.json"
 TOKEN_COST_SUMMARY="${SAVE_DIR_ABS}/token_cost_summary.md"
 
-echo "==> [7/7] Token cost summary"
+echo "==> [9/9] Token cost summary"
 if [[ -f "${TOKEN_COST_JSON}" ]]; then
   SUMMARY_CMD=(
     "${PYTHON_ENV_PREFIX[@]}" uv run --project "${SCRIPT_DIR}" python "${SCRIPT_DIR}/summarize_token_cost.py"

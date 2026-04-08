@@ -1,0 +1,14 @@
+[project]
+name = "membase-lightmem-benchmark"
+version = "0.1.0"
+description = "Standalone uv environment for MemBase LightMem benchmark"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "lightmem @ git+https://github.com/zjunlp/LightMem@a19ea88df47c73fd2f55d27f64616467ef576a81",
+    "litellm==1.75.9",
+    "openai==2.3.0",
+    "tiktoken>=0.7.0",
+    "tqdm==4.67.1",
+    "pydantic==2.12.0",
+    "nltk==3.9.2",
+]

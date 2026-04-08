@@ -167,9 +167,19 @@ class NonCachedLLMOperator(ABC):
         """
         if not self._check():
             raise ValueError("The `interface` is not set.")
+        if batch_size <= 0:
+            raise ValueError("`batch_size` must be a positive integer.")
         
         messages_list = self._preprocess(*args)
         size = len(messages_list)
+
+        # Align batching with backend concurrency capacity. For an OpenAI client pool,
+        # `pool_size` is the actual parallelism. Oversized batches can make progress
+        # appear frozen because updates only happen after a full batch returns.
+        effective_batch_size = batch_size
+        pool_size = getattr(self._interface, "pool_size", None)
+        if isinstance(pool_size, int) and pool_size > 0:
+            effective_batch_size = min(batch_size, pool_size)
 
         progress_bar = tqdm(
             total=size, 
@@ -177,10 +187,10 @@ class NonCachedLLMOperator(ABC):
         )
         final_responses = []
         
-        for i in range(0, size, batch_size):
+        for i in range(0, size, effective_batch_size):
             batch_messages_list = [
                 messages_list[batch_indice] 
-                for batch_indice in range(i, min(i + batch_size, size))
+                for batch_indice in range(i, min(i + effective_batch_size, size))
             ]
             results = self._interface(batch_messages_list, **kwargs)
             if isinstance(results, dict):

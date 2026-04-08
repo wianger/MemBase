@@ -5,9 +5,11 @@ from ..utils._lazy_mapping import _LazyMapping
 _MAPPING_NAMES = OrderedDict[str, str](
     [
         ("A-MEM", "AMEMConfig"),
+        ("LightMem", "LightMemConfig"),
         ("LangMem", "LangMemConfig"),
         ("Long-Context", "LongContextConfig"),
         ("NaiveRAG", "NaiveRAGConfig"),
+        ("SimpleMem", "SimpleMemConfig"),
         ("MemOS", "MemOSConfig"),
         ("EverMemOS", "EverMemOSConfig"),
         ("HippoRAG2", "HippoRAGConfig"),
@@ -18,9 +20,11 @@ _MAPPING_NAMES = OrderedDict[str, str](
 _MODULE_MAPPING = OrderedDict[str, str](
     [
         ("A-MEM", "amem"),
+        ("LightMem", "lightmem"),
         ("LangMem", "langmem"),
         ("Long-Context", "long_context"),
         ("NaiveRAG", "naive_rag"),
+        ("SimpleMem", "simplemem"),
         ("MemOS", "memos"),
         ("EverMemOS", "evermemos"),
         ("HippoRAG2", "hipporag"),

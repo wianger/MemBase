@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
-# Check Mem0-related LLM and embedding endpoints before running benchmark.
+# Check LLM endpoint before running the full LightMem benchmark.
 #
 # Usage:
-#   cd benchmarks/mem0
+#   cd benchmarks/lightmem
 #   ./check_endpoints.sh
 #
 # Public environment overrides:
-#   LLM_BASE_URL, EMBEDDING_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, API_KEY
-#   TIMEOUT_SECONDS, CHAT_PROMPT, EMBEDDING_INPUT
+#   LLM_BASE_URL, LLM_MODEL, API_KEY, TIMEOUT_SECONDS, CHAT_PROMPT
+#   EMBEDDING_BASE_URL, EMBEDDING_MODEL, EMBEDDING_API_KEY
+#   NOTE: by default LightMem uses local sentence-transformers embedding model.
+#         Set EMBEDDING_BASE_URL to enable remote OpenAI-compatible /embeddings check.
 set -euo pipefail
 
 LLM_BASE_URL="${LLM_BASE_URL:-http://10.77.110.187:8000/v1}"
-EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.77.110.187:8001/v1}"
 LLM_MODEL="${LLM_MODEL:-qwen3.5-9b}"
-EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-8b}"
 API_KEY="${API_KEY:-EMPTY}"
+EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.77.110.187:8001/v1}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-8b}"
+EMBEDDING_API_KEY="${EMBEDDING_API_KEY:-${API_KEY}}"
 
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-20}"
 CHAT_PROMPT="${CHAT_PROMPT:-你好！}"
-EMBEDDING_INPUT="${EMBEDDING_INPUT:-这是一段需要转换为向量的文本。}"
 
 extract_host() {
   local url="$1"
@@ -27,7 +29,13 @@ extract_host() {
 
 LLM_HOST="$(extract_host "${LLM_BASE_URL}")"
 EMBEDDING_HOST="$(extract_host "${EMBEDDING_BASE_URL}")"
-NO_PROXY_HOSTS="${LLM_HOST},${EMBEDDING_HOST},127.0.0.1,localhost"
+NO_PROXY_HOSTS="127.0.0.1,localhost"
+if [[ -n "${LLM_HOST}" ]]; then
+  NO_PROXY_HOSTS="${LLM_HOST},${NO_PROXY_HOSTS}"
+fi
+if [[ -n "${EMBEDDING_HOST}" ]]; then
+  NO_PROXY_HOSTS="${EMBEDDING_HOST},${NO_PROXY_HOSTS}"
+fi
 
 CURL_PREFIX=(
   env
@@ -51,21 +59,33 @@ if [[ -n "${API_KEY}" && "${API_KEY}" != "EMPTY" ]]; then
   AUTH_HEADERS=(-H "Authorization: Bearer ${API_KEY}")
 fi
 
+EMBEDDING_AUTH_HEADERS=()
+if [[ -n "${EMBEDDING_API_KEY}" && "${EMBEDDING_API_KEY}" != "EMPTY" ]]; then
+  EMBEDDING_AUTH_HEADERS=(-H "Authorization: Bearer ${EMBEDDING_API_KEY}")
+fi
+
 run_json_check() {
   local name="$1"
   local method="$2"
   local url="$3"
   local payload="${4:-}"
+  local header_group="${5:-llm}"
 
   local tmp_body
   tmp_body="$(mktemp)"
   local status
+  local -a headers
+  if [[ "${header_group}" == "embedding" ]]; then
+    headers=("${EMBEDDING_AUTH_HEADERS[@]}")
+  else
+    headers=("${AUTH_HEADERS[@]}")
+  fi
 
   if [[ "${method}" == "GET" ]]; then
     status="$(
       "${CURL_PREFIX[@]}" \
         -X GET \
-        "${AUTH_HEADERS[@]}" \
+        "${headers[@]}" \
         -H "Content-Type: application/json" \
         -o "${tmp_body}" \
         -w "%{http_code}" \
@@ -75,7 +95,7 @@ run_json_check() {
     status="$(
       "${CURL_PREFIX[@]}" \
         -X POST \
-        "${AUTH_HEADERS[@]}" \
+        "${headers[@]}" \
         -H "Content-Type: application/json" \
         -d "${payload}" \
         -o "${tmp_body}" \
@@ -102,11 +122,9 @@ run_json_check() {
 }
 
 LLM_MODELS_URL="${LLM_BASE_URL%/}/models"
-EMBEDDING_MODELS_URL="${EMBEDDING_BASE_URL%/}/models"
 CHAT_URL="${LLM_BASE_URL%/}/chat/completions"
-EMBEDDING_URL="${EMBEDDING_BASE_URL%/}/embeddings"
 
-CHAT_PAYLOAD="$(cat <<EOF
+CHAT_PAYLOAD="$(cat <<JSON
 {
   "model": "${LLM_MODEL}",
   "messages": [
@@ -115,29 +133,32 @@ CHAT_PAYLOAD="$(cat <<EOF
   "temperature": 0.0,
   "max_tokens": 64
 }
-EOF
-)"
-
-EMBEDDING_PAYLOAD="$(cat <<EOF
-{
-  "model": "${EMBEDDING_MODEL}",
-  "input": "${EMBEDDING_INPUT}"
-}
-EOF
+JSON
 )"
 
 echo "== Endpoint check =="
-echo "LLM base URL      : ${LLM_BASE_URL}"
-echo "Embedding base URL: ${EMBEDDING_BASE_URL}"
-echo "LLM model         : ${LLM_MODEL}"
-echo "Embedding model   : ${EMBEDDING_MODEL}"
-echo "NO_PROXY          : ${NO_PROXY_HOSTS}"
+echo "LLM base URL: ${LLM_BASE_URL}"
+echo "LLM model   : ${LLM_MODEL}"
+echo "NO_PROXY    : ${NO_PROXY_HOSTS}"
 echo
 
 run_json_check "LLM /models" "GET" "${LLM_MODELS_URL}"
-run_json_check "Embedding /models" "GET" "${EMBEDDING_MODELS_URL}"
 run_json_check "LLM chat completion" "POST" "${CHAT_URL}" "${CHAT_PAYLOAD}"
-run_json_check "Embedding vectorization" "POST" "${EMBEDDING_URL}" "${EMBEDDING_PAYLOAD}"
+
+if [[ -n "${EMBEDDING_BASE_URL}" ]]; then
+  EMBEDDINGS_URL="${EMBEDDING_BASE_URL%/}/embeddings"
+  EMBEDDINGS_PAYLOAD="$(cat <<JSON
+{
+  "model": "${EMBEDDING_MODEL}",
+  "input": "endpoint probe"
+}
+JSON
+)"
+  run_json_check "Embedding /embeddings" "POST" "${EMBEDDINGS_URL}" "${EMBEDDINGS_PAYLOAD}" "embedding"
+else
+  echo "ℹ️  Skip embedding API check: EMBEDDING_BASE_URL is unset."
+  echo "   LightMem default mode uses local sentence-transformers embedding model."
+fi
 
 echo
 echo "🎉 All endpoint checks passed."

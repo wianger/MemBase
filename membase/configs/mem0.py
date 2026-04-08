@@ -126,6 +126,23 @@ class Mem0Config(MemBaseConfig):
             {"db": "/path/to/kuzu_db"},
         ],
     )
+    graph_store_custom_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Optional extra instruction appended to Mem0 graph relation-extraction prompt. "
+            "Use this to enforce strict relation schema constraints (e.g., always provide "
+            "`source`, `relationship`, `destination`)."
+        ),
+    )
+    graph_store_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Optional graph node matching threshold forwarded to Mem0 graph_store config. "
+            "If unset, Mem0 uses its internal default."
+        ),
+    )
 
     reranker_provider: Literal[
         "cohere", "sentence_transformer", "zero_entropy", "llm_reranker", "huggingface",
@@ -180,6 +197,11 @@ class Mem0Config(MemBaseConfig):
                 self.graph_store_config = {
                     **self.graph_store_config,
                     "db": os.path.join(self.save_dir, "kuzu_db"),
+                }
+            if self.graph_store_threshold is not None and "threshold" not in self.graph_store_config:
+                self.graph_store_config = {
+                    **self.graph_store_config,
+                    "threshold": self.graph_store_threshold,
                 }
         return self
 
@@ -236,9 +258,12 @@ class Mem0Config(MemBaseConfig):
 
         # Mem0 requires LLM config inside `graph_store.config` for entity extraction.
         if self.graph_store_provider is not None:
+            graph_store_cfg = deepcopy(self.graph_store_config)
+            if self.graph_store_custom_prompt is not None:
+                graph_store_cfg["custom_prompt"] = self.graph_store_custom_prompt
             cfg["graph_store"] = {
                 "provider": self.graph_store_provider,
-                "config": deepcopy(self.graph_store_config),
+                "config": graph_store_cfg,
                 "llm": deepcopy(cfg["llm"]),
             }
 

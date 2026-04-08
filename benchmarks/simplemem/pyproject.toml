@@ -1,0 +1,14 @@
+[project]
+name = "membase-simplemem-benchmark"
+version = "0.1.0"
+description = "Standalone uv environment for MemBase SimpleMem benchmark"
+requires-python = ">=3.12"
+dependencies = [
+    "simplemem==0.1.0",
+    "litellm==1.82.1",
+    "openai>=2.26.0,<3.0.0",
+    "tiktoken>=0.7.0",
+    "tqdm==4.67.1",
+    "pydantic==2.11.10",
+    "nltk==3.9.2",
+]

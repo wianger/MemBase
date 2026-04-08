@@ -8,6 +8,7 @@
 #
 # Public environment overrides:
 #   LLM_BASE_URL, EMBEDDING_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, API_KEY
+#   LLM_API_POOL_SIZE (default 16; OpenAI client pool size for Stage3 parallel requests)
 #   DATASET_PATH, NUM_WORKERS, TOP_K, QA_BATCH_SIZE, JUDGE_BATCH_SIZE, SAMPLE_SIZE
 #   EMBEDDING_DIM (optional; skips auto-detection if set)
 #   TOKENIZER_PATH (optional; if unset, prefer <repo_root>/models/<LLM_MODEL>, else fallback to LLM_MODEL)
@@ -23,11 +24,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ==========================
 # Defaults (override by env)
 # ==========================
-LLM_BASE_URL="${LLM_BASE_URL:-http://10.0.2.68:8000/v1}"
-EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.0.2.68:8001/v1}"
+LLM_BASE_URL="${LLM_BASE_URL:-http://10.77.110.187:8000/v1}"
+EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://10.77.110.187:8001/v1}"
 LLM_MODEL="${LLM_MODEL:-qwen3.5-9b}"
 EMBEDDING_MODEL="${EMBEDDING_MODEL:-qwen3-embedding-8b}"
 API_KEY="${API_KEY:-EMPTY}"
+LLM_API_POOL_SIZE="${LLM_API_POOL_SIZE:-16}"
 
 DATASET_PATH="${DATASET_PATH:-${REPO_ROOT}/datasets/locomo/data/locomo10.json}"
 NUM_WORKERS="${NUM_WORKERS:-16}"
@@ -38,7 +40,7 @@ SAMPLE_SIZE="${SAMPLE_SIZE:-}"
 TOKENIZER_PATH="${TOKENIZER_PATH:-}"
 EMBEDDING_TOKENIZER_PATH="${EMBEDDING_TOKENIZER_PATH:-}"
 HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
-LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-false}"
+LITELLM_LOCAL_MODEL_COST_MAP="${LITELLM_LOCAL_MODEL_COST_MAP:-true}"
 
 # If TOKENIZER_PATH is not explicitly provided, prefer local model files under
 # <repo_root>/models/<llm_model>. Fallback to model name for litellm/tiktoken.
@@ -68,7 +70,7 @@ RUN_DIR="${SCRIPT_DIR}/.run"
 RUNTIME_CONFIG="${RUN_DIR}/naive_rag_config.runtime.json"
 RUNTIME_API_CONFIG="${RUN_DIR}/api_config.runtime.json"
 
-NO_PROXY_HOSTS="10.0.2.68,127.0.0.1,localhost"
+NO_PROXY_HOSTS="10.77.110.187,127.0.0.1,localhost"
 PYTHON_ENV_PREFIX=(
   env
   -u http_proxy
@@ -113,6 +115,11 @@ fi
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "ERROR: uv is not installed or not in PATH."
+  exit 1
+fi
+
+if ! [[ "${LLM_API_POOL_SIZE}" =~ ^[0-9]+$ ]] || [[ "${LLM_API_POOL_SIZE}" -le 0 ]]; then
+  echo "ERROR: LLM_API_POOL_SIZE must be a positive integer, got: ${LLM_API_POOL_SIZE}"
   exit 1
 fi
 
@@ -237,15 +244,40 @@ cat > "${RUNTIME_CONFIG}" <<EOF
 }
 EOF
 
+API_KEYS_JSON="$(
+  API_KEY="${API_KEY}" \
+  LLM_API_POOL_SIZE="${LLM_API_POOL_SIZE}" \
+  python3 - <<'PY'
+import json
+import os
+
+n = int(os.environ["LLM_API_POOL_SIZE"])
+print(json.dumps([os.environ["API_KEY"]] * n, ensure_ascii=False))
+PY
+)"
+
+BASE_URLS_JSON="$(
+  LLM_BASE_URL="${LLM_BASE_URL}" \
+  LLM_API_POOL_SIZE="${LLM_API_POOL_SIZE}" \
+  python3 - <<'PY'
+import json
+import os
+
+n = int(os.environ["LLM_API_POOL_SIZE"])
+print(json.dumps([os.environ["LLM_BASE_URL"]] * n, ensure_ascii=False))
+PY
+)"
+
 cat > "${RUNTIME_API_CONFIG}" <<EOF
 {
-    "api_keys": ["${API_KEY}"],
-    "base_urls": ["${LLM_BASE_URL}"]
+    "api_keys": ${API_KEYS_JSON},
+    "base_urls": ${BASE_URLS_JSON}
 }
 EOF
 
 echo "Runtime config: ${RUNTIME_CONFIG}"
 echo "Runtime api config: ${RUNTIME_API_CONFIG}"
+echo "LLM API pool size (Stage3): ${LLM_API_POOL_SIZE}"
 echo
 
 echo "==> [4/7] Stage 1 - memory construction"
