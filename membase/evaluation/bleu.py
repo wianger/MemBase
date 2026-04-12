@@ -1,5 +1,6 @@
 import re
-from .base import BaseMetric, MetricResult
+from .base import BaseMetric 
+from ..model_types.evaluation import MetricResult
 from typing import ClassVar, Any
 
 

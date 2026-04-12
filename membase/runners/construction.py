@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime
@@ -12,13 +13,16 @@ from pydantic import (
 )
 from tqdm import tqdm
 from ..configs import CONFIG_MAPPING
-from ..datasets import DATASET_MAPPING
+from ..datasets import DATASET_MAPPING, ONLINE_EVAL_ENV_MAPPING
+from ..datasets.online_base import OnlineMemBaseDataset, OnlineEvalEnv
 from ..layers import MEMORY_LAYERS_MAPPING
 from ..model_types.dataset import (
     Message, 
     Trajectory, 
     QuestionAnswerPair,
+    MemoryDataset, 
 )
+from ..model_types.evaluation import OnlineEvalResult
 from ..utils import (
     CostState,
     CostStateManager,
@@ -39,7 +43,9 @@ def memory_construction(
     rerun: bool = False,
     message_preprocessor: Callable[[Message], Message] | None = None,
     strict: bool = True,
-) -> dict[str, float]: 
+    dataset_cls: type[MemoryDataset] | None = None,
+    online_eval_env: OnlineEvalEnv | None = None,
+) -> dict[str, float | list[OnlineEvalResult]]: 
     """Given a specific interaction trajectory, build a memory for one user.
 
     This function is designed to be submitted to a thread pool so that
@@ -63,11 +69,18 @@ def memory_construction(
             If it is enabled, any error raised by the memory layer during memory construction 
             will propagate and abort the trajectory. If it is disabled, such errors are logged 
             and the message is skipped so the remaining trajectory can continue.
+        dataset_cls (`type[MemoryDataset] | None`, optional):
+            The dataset class. When it is an online dataset, the memory construction process is 
+            routed to its evaluation logic.
+        online_eval_env (`OnlineEvalEnv | None`, optional):
+            Evaluation environment for online datasets. If not provided, online
+            evaluation is skipped even for task messages.
 
     Returns:
-        `dict[str, float]`: 
+        `dict[str, float | list[OnlineEvalResult]]`: 
             A dictionary containing the total time and the average time per operation of 
-            adding new message.
+            adding new message. If the dataset is an online dataset, the evaluation results are 
+            also included.
     """
     config = deepcopy(config) or {}
     # It overrides the user id in the config. 
@@ -86,9 +99,16 @@ def memory_construction(
     if message_preprocessor is None:
         message_preprocessor = lambda message: message
 
+    is_online = (
+        dataset_cls is not None
+        and issubclass(dataset_cls, OnlineMemBaseDataset)
+        and online_eval_env is not None
+    )
+
     output = {
         "total_add_time": 0.0,
         "avg_add_time": 0.0,
+        "eval_results": [],
     }
 
     with _LOCK:
@@ -107,23 +127,52 @@ def memory_construction(
             leave=False,   
         )
 
-        num_failed = 0
+        num_add_failed = 0
+        num_eval_failed = 0
         for session in trajectory:
             for message in session:
                 start_time = datetime.now() 
                 message = message.model_copy(deep=True)
                 message = message_preprocessor(message)
+
                 try:
-                    layer.add_message(message)
+                    if message.metadata.get("is_task"):
+                        if is_online:
+                            eval_result = dataset_cls.online_evaluate(
+                                message, 
+                                layer, 
+                                online_eval_env,
+                            )
+                            output["eval_results"].extend(eval_result)
+                        else:
+                            if dataset_cls is not None:
+                                warnings.warn(
+                                    f"Message '{message.id}' is marked as a task but "
+                                    f"dataset '{dataset_cls.__name__}' does not support "
+                                    "online evaluation. It falls back to normal memory construction.",
+                                    UserWarning,
+                                )
+                            layer.add_message(message)
+                    else:
+                        layer.add_message(message)
                 except Exception as e:
                     if strict:
                         pbar.close()
                         raise
-                    num_failed += 1
-                    print(
-                        f"⚠️ The message is skipped because the memory layer failed to add it for user '{user_id}': "
-                        f"{e.__class__.__name__}: {e}"
-                    )
+                    if message.metadata.get("is_task") and is_online:
+                        num_eval_failed += 1
+                        print(
+                            "⚠️ Online evaluation fails for a task message "
+                            f"'{message.id}' for user '{user_id}': "
+                            f"{e.__class__.__name__}: {e}"
+                        )
+                    else:
+                        num_add_failed += 1
+                        print(
+                            "⚠️ The message is skipped because the memory layer "
+                            f"fails to add it for user '{user_id}': "
+                            f"{e.__class__.__name__}: {e}"
+                        )
 
                 end_time = datetime.now() 
                 output["total_add_time"] += (end_time - start_time).total_seconds()
@@ -131,10 +180,17 @@ def memory_construction(
                 pbar.update(1) 
                 time.sleep(0.2)
         pbar.close()
-        if num_failed > 0:
+
+        total_failed = num_add_failed + num_eval_failed
+        if total_failed > 0:
+            parts = []
+            if num_add_failed > 0:
+                parts.append(f"{num_add_failed} message addition failure(s)")
+            if num_eval_failed > 0:
+                parts.append(f"{num_eval_failed} online evaluation failure(s)")
             print(
-                f"⚠️ {num_failed}/{total_msgs} messages are skipped " 
-                f"because the memory layer failed to add them for user '{user_id}'."
+                f"⚠️ {total_failed}/{total_msgs} messages are not processed successfully "
+                f"for user '{user_id}': {', '.join(parts)}."
             )
     
     start_time = datetime.now()   
@@ -237,13 +293,19 @@ class ConstructionRunnerConfig(BaseModel):
         default=None,
         description="A callable that filters dataset samples.",
     )
+    online_eval_config_path: str | None = Field(
+        default=None,
+        description="Path to a JSON config for the online evaluation environment.",
+    )
 
 
 class ConstructionRunner:
     """Runner that orchestrates the memory construction stage.
 
     It loads the dataset, sets up token-cost monitoring, and dispatches 
-    per-trajectory construction tasks to a thread pool.
+    per-trajectory construction tasks to a thread pool.  For online-capable
+    datasets, it also resolves the evaluation environment and collects,
+    aggregates, and persists evaluation results.
     """
 
     def __init__(self, config: ConstructionRunnerConfig) -> None:
@@ -264,13 +326,14 @@ class ConstructionRunner:
                 return json.load(f)
         return None
 
-    def run(self) -> list[dict[str, float]]:
+    def run(self) -> list[dict[str, float | list[OnlineEvalResult]]]:
         """Execute the memory construction pipeline.
 
         Returns:
-            `list[dict[str, float]]`: 
-                A list of per-trajectory timing dictionaries, each containing 
-                the total time and the average time per operation of adding new message.
+            `list[dict[str, float | list[OnlineEvalResult]]]`: 
+                A list of per-trajectory result dictionaries containing the total time and 
+                the average time per operation of adding new message. 
+                If the dataset is an online dataset, the evaluation results are also included.
         """
         cfg = self.config
         config = self._resolve_memory_config()
@@ -280,7 +343,7 @@ class ConstructionRunner:
         config_cls = CONFIG_MAPPING[cfg.memory_type]
         if config is None:
             dummy_config = config_cls(user_id="guest")
-        else:
+     ff   else:
             dummy_config = config_cls(**config)
 
         # If token cost file exists, load it.
@@ -341,6 +404,24 @@ class ConstructionRunner:
         print(repr(dataset))
         print()
 
+        # Resolve online evaluation environment.
+        online_eval_env = None
+        if (
+            issubclass(ds_cls, OnlineMemBaseDataset)
+            and cfg.dataset_type in ONLINE_EVAL_ENV_MAPPING
+        ):
+            env_cls = ONLINE_EVAL_ENV_MAPPING[cfg.dataset_type]
+            if cfg.online_eval_config_path is not None:
+                with open(cfg.online_eval_config_path, "r", encoding="utf-8") as f:
+                    env_config = json.load(f)
+                online_eval_env = env_cls(**env_config)
+            else:
+                online_eval_env = env_cls()
+            print(
+                f"⚖️ Online evaluation is enabled for the dataset '{cfg.dataset_type}'."
+            )
+            print()
+
         # Resolve index range.
         start_idx = cfg.start_idx if cfg.start_idx is not None else 0
         end_idx = cfg.end_idx if cfg.end_idx is not None else len(dataset)
@@ -352,7 +433,7 @@ class ConstructionRunner:
         # Dispatch per-trajectory construction to a thread pool.
         results = []
         with ThreadPoolExecutor(max_workers=cfg.num_workers) as executor:
-            futures = []
+            future_to_user_id = {}
             for trajectory, _ in zip(*dataset[start_idx:end_idx]):
                 # Note that this code is for academic purpose, the embedding model may be loaded multiple times. 
                 user_id = trajectory.id
@@ -365,15 +446,18 @@ class ConstructionRunner:
                     rerun=cfg.rerun,
                     message_preprocessor=cfg.message_preprocessor,
                     strict=cfg.strict,
+                    dataset_cls=ds_cls,
+                    online_eval_env=online_eval_env,
                 )
-                futures.append(future)
+                future_to_user_id[future] = user_id
             for future in tqdm(
-                as_completed(futures),
-                total=len(futures),
+                as_completed(future_to_user_id),
+                total=len(future_to_user_id),
                 desc="📉 Processing trajectories",
             ):
                 try:
                     result = future.result()
+                    result["user_id"] = future_to_user_id[future]
                     results.append(result)
                 except Exception as e:
                     print(f"❌ Error occurs when the trajectory is processed: {e}")
@@ -381,7 +465,7 @@ class ConstructionRunner:
         if len(results) == end_idx - start_idx:
             print("The memory construction process is completed successfully 😀.")
 
-        # Print statistics.
+        # Print construction timing statistics.
         total_time = 0.0
         avg_time_per_add_session = 0.0
         num_valid_trajectories = 0
@@ -401,6 +485,62 @@ class ConstructionRunner:
             f"For {cfg.memory_type}, the average time per operation of adding new session "
             f"is {avg_time_per_add_session:.2f} seconds."
         )
+
+        # Aggregate and save online evaluation results.
+        if online_eval_env is not None:
+            all_eval_entries = []
+            metric_sums = {}
+            metric_counts = {}
+            for result in results:
+                for eval_result in result["eval_results"]:
+                    metrics = eval_result["metrics"]
+                    rollout = eval_result["rollout"]
+                    for metric_name, metric_val in metrics.items():
+                        # The available metrics are subject to the specific question type and may vary.
+                        metric_sums[metric_name] = metric_sums.get(metric_name, 0.0) + metric_val["value"]
+                        metric_counts[metric_name] = metric_counts.get(metric_name, 0) + 1
+
+                    all_eval_entries.append(
+                        {
+                            "user_id": user_id,
+                            "metrics": metrics,
+                            "rollout": [
+                                msg.model_dump(mode="python") for msg in rollout
+                            ],
+                        }
+                    )
+
+            # If all messages have been skipped or all evaluation processes fail
+            # no evaluation results are reported.
+            if not all_eval_entries:
+                print("No online evaluation results are reported.")
+            else:
+                # Print online evaluation summary.
+                print()
+                print(f"📊 Online evaluation summary:")
+                print(f"There are {len(all_eval_entries)} task(s) are evaluated.")
+                for metric_name in sorted(metric_sums):
+                    avg = metric_sums[metric_name] / metric_counts[metric_name]
+                    print(f"  {metric_name}: {avg:.4f} ({metric_counts[metric_name]} samples)")
+                print()
+
+                # Save online evaluation results.
+                save_dir = config['save_dir']
+                output_path = os.path.join(
+                    save_dir,
+                    f"{cfg.dataset_type}_online_evaluation.json",
+                )
+                os.makedirs(save_dir, exist_ok=True)
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        all_eval_entries, 
+                        f, 
+                        ensure_ascii=False, 
+                        indent=4,
+                    )
+                print(
+                    f"✅ {len(all_eval_entries)} online evaluation results are saved to '{output_path}'." 
+                )
 
         # Save token cost statistics.
         CostStateManager.save_to_json_file(cfg.token_cost_save_filename)

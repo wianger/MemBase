@@ -11,6 +11,18 @@ PROMPT_COLLECTIONS = OrderedDict[str, str](
             ), 
         ),
 
+        # See https://arxiv.org/pdf/2601.06966 and https://github.com/AvatarMemory/RealMemBench/blob/67afd0891d603adcc4458ff0449df306ef296b7a/eval/run_generation.py#L31. 
+        (
+            "realmem-question-answering",
+            (
+                "You are a personal AI assistant that helps the user with some long-term tasks. "
+                "Please respond to the user's latest message based on the reference memories.\n\n"
+                "Memories:\n$context\n\n"
+                "Query: $question\n\n"
+                "Response:"
+            ), 
+        ), 
+
         # See https://arxiv.org/abs/2305.12421. 
         (
             "default-exact-match",
@@ -134,6 +146,30 @@ PROMPT_COLLECTIONS = OrderedDict[str, str](
                 "Just return the label CORRECT or WRONG in a json format with the key as 'label'."
             ),
         ),
+
+        # See https://arxiv.org/pdf/2601.06966. 
+        (
+            "realmem-lm-score",
+            (
+                "Your task is to evaluate whether the [candidate answer] correctly uses user-relevant information, "
+                "guided by the [reference answer].\n\n"
+                "You will be given three pieces of information:\n"
+                "1. The user's current query\n"
+                "2. A reference answer that represents the ideal response based on relevant user memory\n"
+                "3. The candidate answer to be evaluated\n\n"
+                "Scoring rules:\n"
+                "- Score 1: the candidate answer correctly captures the key user-specific facts, constraints, or preferences "
+                "reflected in the reference answer\n"
+                "- Score 0: the candidate answer conflicts with, ignores, or fails to incorporate the key user-specific "
+                "information present in the reference answer\n\n"
+                "Do NOT penalize for tone, style, or minor phrasing differences. "
+                "The candidate answer does not need to be identical to the reference answer.\n\n"
+                "Question: $question\n"
+                "Reference Answer: $golden_answers\n"
+                "Candidate Answer: $prediction\n\n"
+                "Output your result as JSON with keys 'score' (0 or 1) and 'reason' (one sentence explanation)."
+            ), 
+        ), 
     ]
 )
 

@@ -1,4 +1,3 @@
-from __future__ import annotations
 import json
 from datetime import datetime
 from .base import MemBaseDataset
@@ -8,14 +7,14 @@ from ..model_types.dataset import (
     QuestionAnswerPair,
     Message,
 )
-from typing import Any
+from typing import Any, Self
 
 
 class LongMemEval(MemBaseDataset):
     """Dataset wrapper for LongMemEval."""
 
     @classmethod
-    def read_raw_data(cls, path: str) -> LongMemEval:
+    def read_raw_data(cls, path: str) -> Self:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 

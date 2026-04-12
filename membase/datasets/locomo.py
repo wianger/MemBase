@@ -1,4 +1,3 @@
-from __future__ import annotations
 import json
 from datetime import datetime
 from .base import MemBaseDataset
@@ -8,14 +7,14 @@ from ..model_types.dataset import (
     QuestionAnswerPair,
     Message,
 )
-from typing import Any
+from typing import Any, Self
 
 
 class LoCoMo(MemBaseDataset):
     """Dataset wrapper for LoCoMo."""
 
     @classmethod
-    def read_raw_data(cls, path: str) -> LoCoMo:
+    def read_raw_data(cls, path: str) -> Self:
         category_id_to_type = {
             1: "multi-hop",
             2: "temporal",

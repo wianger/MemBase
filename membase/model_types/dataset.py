@@ -427,7 +427,7 @@ class MemoryDataset(BaseMetadataModel):
         return {}
 
     @classmethod
-    def read_raw_data(cls, path: str) -> MemoryDataset:
+    def read_raw_data(cls, path: str) -> Self:
         """Read the raw data from the given path and construct a dataset instance.
 
         Different datasets may have vastly different raw data formats (e.g., JSON,
@@ -442,7 +442,7 @@ class MemoryDataset(BaseMetadataModel):
                 The path to the raw data file or directory.
 
         Returns:
-            `MemoryDataset`:
+            `Self`:
                 The dataset instance constructed from the raw data.
         """
         return cls.read_dataset(path)
@@ -496,7 +496,7 @@ class MemoryDataset(BaseMetadataModel):
         seed: int | None = None,
         sample_filter: Callable[[Trajectory, list[QuestionAnswerPair]], bool] | None = None,
         question_filter: Callable[[QuestionAnswerPair], bool] | None = None,
-    ) -> MemoryDataset:
+    ) -> Self:
         """Sample a subset from the dataset with optional filtering.
 
         This method supports a three-stage pipeline:
@@ -535,7 +535,7 @@ class MemoryDataset(BaseMetadataModel):
                     lambda qa: qa.metadata.get("question_type") == "single-hop"
 
         Returns:
-            `MemoryDataset`:
+            `Self`:
                 A new dataset instance containing the filtered and sampled data.
         """
         trajectories = self.trajectories
@@ -634,7 +634,7 @@ class MemoryDataset(BaseMetadataModel):
         return self.trajectories[index], self.qa_pair_lists[index]
 
     @classmethod
-    def read_dataset(cls, path: str) -> MemoryDataset:
+    def read_dataset(cls, path: str) -> Self:
         """Read the standardized dataset from the given path.
         
         Args:
@@ -642,7 +642,7 @@ class MemoryDataset(BaseMetadataModel):
                 The path to the standardized dataset.
         
         Returns:
-            `MemoryDataset`:
+            `Self`:
                 The standardized dataset.
         """
         return cls.model_validate_json(Path(path).read_text(encoding="utf-8"))

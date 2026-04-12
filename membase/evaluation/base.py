@@ -1,19 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import (
-    ClassVar,
-    TypedDict,
-    Any,
-)
-
-
-class MetricResult(TypedDict):
-    """Typed result for a single example from a single metric."""
-
-    value: float
-    """The scalar score for this example."""
-
-    metadata: dict[str, Any]
-    """Auxiliary information (e.g., per-sub-metric breakdown)."""
+from ..model_types.evaluation import MetricResult
+from typing import ClassVar, Any
 
 
 class BaseMetric(ABC):
