@@ -8,8 +8,9 @@ A comprehensive evaluation framework for benchmarking various memory layers on l
 
 - **Checkpoint, Recovery & Rerun**: It automatically saves progress during memory construction. If interrupted, simply re-run the script and it will skip already-processed trajectories and resume from where it left off. Use the `--rerun` flag to force rebuild memories from scratch when needed.
 - **Non-Invasive Token Cost Monitoring**: Built-in token consumption tracking for LLM API calls. It uses monkey-patching to intercept calls **without modifying any baseline's internal code**.
-- **Modular Architecture**: Clean separation between memory layers, datasets, and evaluation logic. Adding a new memory layer only requires implementing the `MemBaseLayer` interface and registering it in the `membase` package. New datasets can be added by subclassing `MemBaseDataset` and registering them.
+- **Modular Architecture**: Clean separation between memory layers, datasets, and evaluation logic. Adding a new memory layer only requires implementing the `MemBaseLayer` interface and registering it in the `membase` package. New datasets can be added by subclassing `MemBaseDataset` (or `OnlineMemBaseDataset` for online evaluation) and registering them.
 - **Multiple Baselines & Datasets**: See [Supported Memory Layers](#supported-memory-layers) and [Supported Datasets](#supported-datasets) below.
+- **Online Evaluation**: During the memory construction process, task messages can trigger memory retrieval and memory evaluation. Pass `--online-eval-config-path` to `memory_construction.py` with a JSON config for the dataset-specific online evaluation environment.
 
 ---
 
@@ -26,7 +27,7 @@ MemBase/
     ├── __init__.py              # Package-level re-exports
     ├── runners/                 # Runner classes for programmatic pipeline execution
     ├── configs/                 # Configuration classes for each memory layer
-    ├── datasets/                # Dataset loaders
+    ├── datasets/                # Dataset loaders and online evaluation configurations
     ├── evaluation/              # Pluggable evaluation metrics and registry
     ├── layers/                  # Memory layer implementations
     ├── baselines/               # Vendored baseline source code
@@ -76,7 +77,7 @@ The evaluation of all memory baselines follows a **three-stage pipeline**:
 
 ### Stage 1: Memory Construction
 
-User interaction trajectories are fed **incrementally** (message by message) into the memory layer, which builds and updates its internal memory state as each message arrives.
+User interaction trajectories are fed **incrementally** (message by message) into the memory layer, which builds and updates its internal memory state as each message arrives. For **online** datasets, messages marked as tasks may run the dataset's evaluation during this stage instead of a plain memory constuction operation.
 
 ### Stage 2: Memory Retrieval
 
@@ -105,6 +106,7 @@ Using the retrieved memories as context, a question-answering model generates an
 
 - [LongMemEval](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)
 - [LoCoMo](https://github.com/snap-research/locomo/tree/main/data)
+- [RealMem](https://github.com/AvatarMemory/RealMemBench)
 
 ---
 

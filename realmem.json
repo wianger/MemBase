@@ -1,0 +1,10 @@
+{
+    "top_k": 10,
+    "retrieval_kwargs": {},
+    "qa_model": "gpt-4.1-mini",
+    "judge_model": "gpt-4.1-mini",
+    "generation_kwargs": {
+        "temperature": 0.0
+    },
+    "api_config_path": "examples/evaluate_on_realmem/api_config.json"
+}

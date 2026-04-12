@@ -118,6 +118,20 @@ if __name__ == "__main__":
             "(2) file path with function name, e.g. 'path/to/file.py:func'."
         ),
     )
+    parser.add_argument(
+        "--online-eval-config-path",
+        type=str,
+        default=None,
+        help="Path to a JSON config for the online evaluation environment.",
+    )
+
+    parser.add_argument(
+        "--max-sessions",
+        type=int,
+        default=None,
+        help="If set, only the first N sessions in the dataset will be used (for single-trajectory datasets)."
+    )
+
     args = parser.parse_args()
 
     message_preprocessor = None
@@ -130,10 +144,31 @@ if __name__ == "__main__":
         sample_filter = import_function_from_path(args.sample_filter_path)
         print(f"A sample filter is loaded from '{args.sample_filter_path}'.")
 
+
+    # --- max-sessions logic ---
+    dataset_path = args.dataset_path
+    if args.max_sessions is not None:
+        import json
+        from pathlib import Path
+        path = Path(dataset_path)
+        with path.open('r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Only support single-trajectory datasets (like RealMem)
+        if 'dialogues' in data:
+            orig_n = len(data['dialogues'])
+            data['dialogues'] = data['dialogues'][:args.max_sessions]
+            tmp_path = path.parent / (path.stem + f"_first{args.max_sessions}_sessions.json")
+            with tmp_path.open('w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"[memory_construction.py] Truncated dataset to first {args.max_sessions} sessions: {tmp_path} (original {orig_n})")
+            dataset_path = str(tmp_path)
+        else:
+            print("[memory_construction.py] --max-sessions only supports RealMem-style single-trajectory datasets.")
+
     runner_config = ConstructionRunnerConfig(
         memory_type=args.memory_type,
         dataset_type=args.dataset_type,
-        dataset_path=args.dataset_path,
+        dataset_path=dataset_path,
         dataset_standardized=args.dataset_standardized,
         config_path=args.config_path,
         num_workers=args.num_workers,
@@ -147,5 +182,6 @@ if __name__ == "__main__":
         tokenizer_path=args.tokenizer_path,
         message_preprocessor=message_preprocessor,
         sample_filter=sample_filter,
+        online_eval_config_path=args.online_eval_config_path,
     )
     ConstructionRunner(runner_config).run()
