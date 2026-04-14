@@ -306,13 +306,22 @@ class OnlineMemoryManager:
         
             # 2. Extract Foresight
             if self._foresight_extractor:
+                # Note: The following code snippet is not included in the official implementation.
+                input_text = ""
+                for data in memcell_result.original_data:
+                    speaker = data.get('speaker_name') or data.get('sender', 'Unknown')
+                    content = data['content']
+                    msg_ts = data.get('timestamp')
+                    ts_str = from_iso_format(msg_ts)
+                    input_text += f"[{ts_str}] {speaker}: {content}\n"
+
                 foresight_memories = (
-                    await self._foresight_extractor.generate_foresights_for_episode(
-                        episode_memory
+                    await self._foresight_extractor.generate_foresights_for_conversation(
+                        input_text
                     )
                 )
                 if foresight_memories:
-                    memcell_result.foresight_memories = foresight_memories
+                    memcell_result.foresights = foresight_memories
         else:
             # Episode extraction failed - raise exception, don't hide errors
             raise ValueError(
