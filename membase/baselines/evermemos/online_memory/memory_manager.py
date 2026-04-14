@@ -317,7 +317,9 @@ class OnlineMemoryManager:
 
                 foresight_memories = (
                     await self._foresight_extractor.generate_foresights_for_conversation(
-                        input_text
+                        input_text, 
+                        episode_memory.timestamp,
+                        episode_memory.user_id, 
                     )
                 )
                 if foresight_memories:
@@ -502,7 +504,9 @@ class OnlineMemoryManager:
 
                 foresight_memories = (
                     await self._foresight_extractor.generate_foresights_for_conversation(
-                        input_text
+                        input_text, 
+                        episode_memory.timestamp,
+                        episode_memory.user_id, 
                     )
                 )
                 if foresight_memories:
