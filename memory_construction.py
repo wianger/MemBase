@@ -124,8 +124,6 @@ if __name__ == "__main__":
         default=None,
         help="Path to a JSON config for the online evaluation environment.",
     )
-
-
     args = parser.parse_args()
 
     message_preprocessor = None
@@ -138,12 +136,10 @@ if __name__ == "__main__":
         sample_filter = import_function_from_path(args.sample_filter_path)
         print(f"A sample filter is loaded from '{args.sample_filter_path}'.")
 
-
-   
     runner_config = ConstructionRunnerConfig(
         memory_type=args.memory_type,
         dataset_type=args.dataset_type,
-        dataset_path=dataset_path,
+        dataset_path=args.dataset_path,
         dataset_standardized=args.dataset_standardized,
         config_path=args.config_path,
         num_workers=args.num_workers,
@@ -157,6 +153,6 @@ if __name__ == "__main__":
         tokenizer_path=args.tokenizer_path,
         message_preprocessor=message_preprocessor,
         sample_filter=sample_filter,
-        online_eval_config_path=args.online_eval_fconfig_path,
+        online_eval_config_path=args.online_eval_config_path,
     )
     ConstructionRunner(runner_config).run()
