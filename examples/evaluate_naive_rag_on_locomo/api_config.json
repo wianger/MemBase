@@ -1,4 +1,4 @@
 {
-    "api_keys": ["YOUR_OPENAI_API_KEY"],
-    "base_urls": ["YOUR_OPENAI_API_BASE"]
+    "api_keys": ["YOUR_DEEPSEEK_API_KEY"],
+    "base_urls": ["https://api.deepseek.com"]
 }

@@ -1,14 +1,14 @@
 {
     "user_id": "guest",
     "llm_provider": "openai",
-    "llm_model": "gpt-4.1-mini",
+    "llm_model": "deepseek-chat",
     "llm_config": {
-        "openai_base_url": "YOUR_OPENAI_API_BASE",
-        "api_key": "YOUR_OPENAI_API_KEY"
+        "openai_base_url": "https://api.deepseek.com",
+        "api_key": "YOUR_DEEPSEEK_API_KEY"
     },
     "embedder_provider": "openai",
-    "embedding_model": "Qwen3-Embedding-4B",
-    "embedding_model_dims": 2560,
+    "embedding_model": "Qwen3-Embedding-8B",
+    "embedding_model_dims": 4096,
     "embedding_config": {
         "openai_base_url": "http://localhost:8008/v1",
         "api_key": "EMPTY"

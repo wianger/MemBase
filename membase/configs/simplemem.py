@@ -1,7 +1,7 @@
 import os
 
 from pydantic import Field, JsonValue, model_validator
-from typing import Self
+from typing import Literal, Self
 
 from .base import MemBaseConfig
 
@@ -21,14 +21,38 @@ class SimpleMemConfig(MemBaseConfig):
         default="gpt-4.1-mini",
         description="LLM model used for memory construction and retrieval planning.",
     )
+    embedding_provider: Literal["sentence_transformer", "openai"] = Field(
+        default="sentence_transformer",
+        description=(
+            "Embedding backend used by SimpleMem. "
+            "`sentence_transformer` loads the model locally, while `openai` "
+            "calls an OpenAI-compatible embeddings endpoint."
+        ),
+    )
     embedding_model: str = Field(
         default="Qwen/Qwen3-Embedding-0.6B",
-        description="Sentence-transformers compatible embedding model.",
+        description="Embedding model name or path.",
     )
     embedding_dimension: int = Field(
         default=1024,
         ge=1,
         description="Embedding dimension for the configured embedding model.",
+    )
+    embedding_api_key: str | None = Field(
+        default=None,
+        description="API key for OpenAI-compatible embedding endpoints.",
+    )
+    embedding_base_url: str | None = Field(
+        default=None,
+        description="Base URL for OpenAI-compatible embedding endpoints.",
+    )
+    embedding_model_kwargs: dict[str, JsonValue] = Field(
+        default_factory=dict,
+        description=(
+            "Additional keyword arguments for the embedding backend. "
+            "For `sentence_transformer`, common keys include `model_kwargs` "
+            "or `encode_kwargs`. For `openai`, extra SDK kwargs may be provided."
+        ),
     )
     embedding_context_length: int = Field(
         default=32768,
@@ -86,4 +110,3 @@ class SimpleMemConfig(MemBaseConfig):
 
     def get_llm_models(self) -> list[str]:
         return [self.llm_model]
-

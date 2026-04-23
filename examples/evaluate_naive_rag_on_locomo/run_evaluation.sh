@@ -4,8 +4,8 @@
 # ========================================================
 search_results_path="naive_rag_output/10_0_2.json"
 dataset_type="LoCoMo"
-qa_model="gpt-4.1-mini"
-judge_model="gpt-4.1-mini"
+qa_model="deepseek-chat"
+judge_model="deepseek-chat"
 qa_batch_size=4
 judge_batch_size=4
 api_config_path="examples/evaluate_naive_rag_on_locomo/api_config.json"

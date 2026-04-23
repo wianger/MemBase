@@ -4,8 +4,8 @@
 # ========================================================
 search_results_path="simplemem_output/10_0_2.json"
 dataset_type="LoCoMo"
-qa_model="gpt-4.1-mini"
-judge_model="gpt-4.1-mini"
+qa_model="deepseek-chat"
+judge_model="deepseek-chat"
 qa_batch_size=4
 judge_batch_size=4
 api_config_path="examples/evaluate_simplemem_on_locomo/api_config.json"
@@ -21,4 +21,3 @@ python3 memory_evaluation.py \
     --qa-batch-size "$qa_batch_size" \
     --judge-batch-size "$judge_batch_size" \
     --api-config-path "$api_config_path"
-

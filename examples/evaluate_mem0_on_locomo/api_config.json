@@ -1,10 +1,4 @@
 {
-    "api_keys": [
-        "sk-your-api-key-1",
-        "sk-your-api-key-2"
-    ],
-    "base_urls": [
-        "https://api.openai.com/v1",
-        "https://api.openai.com/v1"
-    ]
+    "api_keys": ["YOUR_DEEPSEEK_API_KEY"],
+    "base_urls": ["https://api.deepseek.com"]
 }
