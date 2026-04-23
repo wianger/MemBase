@@ -21,11 +21,11 @@ cd "$(dirname "$0")/../.."
 log_file="${log_dir}/process_1.log"
 [ ! -f "$log_file" ] && touch "$log_file"
 
-python memory_construction.py
-    --memory-type "$memory_type"
-    --dataset-type "$dataset_type"
-    --dataset-path "$dataset_path"
-    --config-path "$config_path"
-    --num-workers "$num_workers"
-    --sample-size "$sample_size"
+python memory_construction.py \
+    --memory-type "$memory_type" \
+    --dataset-type "$dataset_type" \
+    --dataset-path "$dataset_path" \
+    --config-path "$config_path" \
+    --num-workers "$num_workers" \
+    --sample-size "$sample_size" \
     --token-cost-save-filename "$token_cost_file" > "$log_file" 2>&1
