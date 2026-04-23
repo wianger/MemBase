@@ -7,6 +7,6 @@ construction_script="examples/evaluate_naive_rag_on_locomo/run_construction.sh"
 search_script="examples/evaluate_naive_rag_on_locomo/run_search.sh"
 evaluation_script="examples/evaluate_naive_rag_on_locomo/run_evaluation.sh"
 
-MEMBASE_FOREGROUND=1 bash "$construction_script"
+bash "$construction_script"
 bash "$search_script"
 bash "$evaluation_script"
