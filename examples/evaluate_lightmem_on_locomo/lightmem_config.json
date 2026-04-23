@@ -8,7 +8,7 @@
     "llm_max_tokens": 16000,
     "llm_top_p": 0.1,
     "pre_compress": true,
-    "llmlingua_model_path": "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
+    "llmlingua_model_path": "/home/user/wyh/MemBase/pretrained_models/llmlingua-2-bert-base-multilingual-cased-meetingbank",
     "compress_rate": 0.8,
     "compress_target_token": -1,
     "topic_segment": true,
