@@ -6,17 +6,17 @@ memory_type="NaiveRAG"
 dataset_type="LoCoMo"
 dataset_path="dataset/locomo/data/locomo10.json"
 config_path="examples/evaluate_naive_rag_on_locomo/naive_rag_config.json"
-num_workers=10
-sample_size=10
-log_dir="naive_rag_logs"
-token_cost_file="token_cost_naive_rag"
+num_workers=4
+sample_size=4
+log_dir="output/naive_rag_logs"
+token_cost_file="${log_dir}/token_cost_naive_rag"
 # ========================================================
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 [ ! -d "$log_dir" ] && mkdir -p "$log_dir"
 
-log_file="${log_dir}/process_1.log"
+log_file="${log_dir}/construction.log"
 [ ! -f "$log_file" ] && touch "$log_file"
 
 python3 memory_construction.py \

@@ -9,11 +9,14 @@ dataset_type="LoCoMo"
 dataset_path="simplemem_output/LoCoMo_stage_1.json"
 config_path="examples/evaluate_simplemem_on_locomo/simplemem_config.json"
 question_filter_path="examples/evaluate_simplemem_on_locomo/question_filter.py:filter_adversarial"
-num_workers=10
+num_workers=4
 top_k=10
 # ========================================================
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+
+log_file="output/simplemem_logs/search.log"
+[ ! -f "$log_file" ] && touch "$log_file"
 
 python3 memory_search.py \
     --memory-type "$memory_type" \
@@ -23,4 +26,4 @@ python3 memory_search.py \
     --config-path "$config_path" \
     --question-filter-path "$question_filter_path" \
     --num-workers "$num_workers" \
-    --top-k "$top_k"
+    --top-k "$top_k" > "$log_file" 2>&1

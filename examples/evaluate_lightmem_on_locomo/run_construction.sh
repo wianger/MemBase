@@ -6,17 +6,17 @@ memory_type="LightMem"
 dataset_type="LoCoMo"
 dataset_path="dataset/locomo/data/locomo10.json"
 config_path="examples/evaluate_lightmem_on_locomo/lightmem_config.json"
-num_workers=10
-sample_size=10
-log_dir="lightmem_logs"
-token_cost_file="token_cost_lightmem"
+num_workers=4
+sample_size=4
+log_dir="output/lightmem_logs"
+token_cost_file="${log_dir}/token_cost_lightmem"
 # ========================================================
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 [ ! -d "$log_dir" ] && mkdir -p "$log_dir"
 
-log_file="${log_dir}/process_1.log"
+log_file="${log_dir}/construction.log"
 [ ! -f "$log_file" ] && touch "$log_file"
 
 python memory_construction.py \
