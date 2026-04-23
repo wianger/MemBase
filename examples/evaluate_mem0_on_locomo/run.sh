@@ -1,0 +1,3 @@
+bash examples/evaluate_mem0_on_locomo/run_construction.sh
+bash examples/evaluate_mem0_on_locomo/run_search.sh
+bash examples/evaluate_mem0_on_locomo/run_evaluation.sh
