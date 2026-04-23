@@ -1,6 +1,6 @@
 import os
 
-from pydantic import Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, PrivateAttr, model_validator
 from typing import Any, Literal, Self
 
 from .base import MemBaseConfig
@@ -8,6 +8,10 @@ from .base import MemBaseConfig
 
 class LightMemConfig(MemBaseConfig):
     """Configuration for the external LightMem adapter."""
+
+    _qdrant_path_was_default: bool = PrivateAttr(default=False)
+    _collection_name_was_default: bool = PrivateAttr(default=False)
+    _summary_collection_name_was_default: bool = PrivateAttr(default=False)
 
     api_key: str | None = Field(
         default=None,
@@ -78,12 +82,27 @@ class LightMemConfig(MemBaseConfig):
 
     @model_validator(mode="after")
     def _populate_paths(self) -> Self:
-        if self.qdrant_path is None:
-            self.qdrant_path = os.path.join(self.save_dir, "qdrant")
+        default_qdrant_path = os.path.join(self.save_dir, "qdrant")
+        if self.qdrant_path is None or (
+            getattr(self, "_qdrant_path_was_default", False)
+            and self.qdrant_path != default_qdrant_path
+        ):
+            self._qdrant_path_was_default = True
+            self.qdrant_path = default_qdrant_path
+        else:
+            self._qdrant_path_was_default = False
+
         if self.collection_name is None:
+            self._collection_name_was_default = True
             self.collection_name = "memory_entries"
+        else:
+            self._collection_name_was_default = False
+
         if self.summary_collection_name is None:
+            self._summary_collection_name_was_default = True
             self.summary_collection_name = "memory_summaries"
+        else:
+            self._summary_collection_name_was_default = False
         return self
 
     def get_llm_models(self) -> list[str]:

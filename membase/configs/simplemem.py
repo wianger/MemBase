@@ -1,6 +1,6 @@
 import os
 
-from pydantic import Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, PrivateAttr, model_validator
 from typing import Literal, Self
 
 from .base import MemBaseConfig
@@ -8,6 +8,9 @@ from .base import MemBaseConfig
 
 class SimpleMemConfig(MemBaseConfig):
     """Configuration for the vendored SimpleMem text backend."""
+
+    _db_path_was_default: bool = PrivateAttr(default=False)
+    _table_name_was_default: bool = PrivateAttr(default=False)
 
     api_key: str | None = Field(
         default=None,
@@ -102,10 +105,21 @@ class SimpleMemConfig(MemBaseConfig):
 
     @model_validator(mode="after")
     def _populate_paths(self) -> Self:
-        if self.db_path is None:
-            self.db_path = os.path.join(self.save_dir, "lancedb")
+        default_db_path = os.path.join(self.save_dir, "lancedb")
+        if self.db_path is None or (
+            getattr(self, "_db_path_was_default", False)
+            and self.db_path != default_db_path
+        ):
+            self._db_path_was_default = True
+            self.db_path = default_db_path
+        else:
+            self._db_path_was_default = False
+
         if self.table_name is None:
+            self._table_name_was_default = True
             self.table_name = "memory_entries"
+        else:
+            self._table_name_was_default = False
         return self
 
     def get_llm_models(self) -> list[str]:
