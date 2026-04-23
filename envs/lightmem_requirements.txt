@@ -1,0 +1,9 @@
+litellm
+qdrant-client
+llmlingua
+sentence-transformers
+transformers
+accelerate
+tiktoken
+openai
+httpx

@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from ..utils import PatchSpec
 from ..model_types.memory import MemoryEntry
 from ..model_types.dataset import Message
-from typing import Any 
+from typing import Any, ClassVar, Literal
 
 
 # Note: This base interface will evolve as additional memory systems are integrated.
@@ -19,6 +19,9 @@ class MemBaseLayer(ABC):
     A-MEM, LangMem, and other memory systems, providing a consistent API for memory 
     operations across different implementations.
     """
+
+    ingest_granularity: ClassVar[Literal["message", "session"]] = "message"
+    """Declare whether construction should feed this layer message-by-message or session-by-session."""
 
     @abstractmethod
     def add_message(self, message: Message, **kwargs: Any) -> None:

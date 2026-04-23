@@ -35,6 +35,64 @@ from typing import Any, Callable
 _LOCK = threading.Lock()
 
 
+def _process_single_message(
+    message: Message,
+    layer: Any,
+    user_id: str,
+    strict: bool,
+    is_online: bool,
+    dataset_cls: type[MemoryDataset] | None,
+    online_eval_env: OnlineEvalEnv | None,
+) -> tuple[int, int, list[OnlineEvalResult]]:
+    eval_results: list[OnlineEvalResult] = []
+    num_add_failed = 0
+    num_eval_failed = 0
+
+    if message.metadata.get("is_task"):
+        if is_online:
+            eval_result = dataset_cls.online_evaluate(
+                message,
+                layer,
+                online_eval_env,
+            )
+            eval_results.extend(eval_result)
+        else:
+            if dataset_cls is not None:
+                warnings.warn(
+                    f"Message '{message.id}' is marked as a task but "
+                    f"dataset '{dataset_cls.__name__}' does not support "
+                    "online evaluation. It falls back to normal memory construction.",
+                    UserWarning,
+                )
+            layer.add_message(message)
+    else:
+        layer.add_message(message)
+
+    return num_add_failed, num_eval_failed, eval_results
+
+
+def _process_single_session(
+    session_messages: list[Message],
+    layer: Any,
+    user_id: str,
+    strict: bool,
+    trajectory: Trajectory,
+    session_idx: int,
+) -> tuple[int, int]:
+    if any(message.metadata.get("is_task") for message in session_messages):
+        raise NotImplementedError(
+            "Session-level construction does not support online task messages yet."
+        )
+
+    layer.add_messages(
+        session_messages,
+        session_id=trajectory[session_idx].id,
+        session_started_at=trajectory[session_idx].started_at,
+        is_last_session=(session_idx == len(trajectory) - 1),
+    )
+    return 0, 0
+
+
 def memory_construction(
     layer_type: str, 
     user_id: str, 
@@ -131,57 +189,83 @@ def memory_construction(
 
         num_add_failed = 0
         num_eval_failed = 0
-        for session in trajectory:
+        ingest_granularity = getattr(layer, "ingest_granularity", "message")
+        for session_idx, session in enumerate(trajectory):
+            prepared_messages = []
             for message in session:
-                start_time = datetime.now() 
-                message = message.model_copy(deep=True)
-                message = message_preprocessor(message)
+                msg = message.model_copy(deep=True)
+                msg = message_preprocessor(msg)
+                prepared_messages.append(msg)
 
+            if ingest_granularity == "session":
+                start_time = datetime.now()
                 try:
-                    if message.metadata.get("is_task"):
-                        if is_online:
-                            eval_result = dataset_cls.online_evaluate(
-                                message, 
-                                layer, 
-                                online_eval_env,
-                            )
-                            output["eval_results"].extend(eval_result)
-                        else:
-                            if dataset_cls is not None:
-                                warnings.warn(
-                                    f"Message '{message.id}' is marked as a task but "
-                                    f"dataset '{dataset_cls.__name__}' does not support "
-                                    "online evaluation. It falls back to normal memory construction.",
-                                    UserWarning,
-                                )
-                            layer.add_message(message)
-                    else:
-                        layer.add_message(message)
+                    session_add_failed, session_eval_failed = _process_single_session(
+                        prepared_messages,
+                        layer,
+                        user_id,
+                        strict,
+                        trajectory,
+                        session_idx,
+                    )
+                    num_add_failed += session_add_failed
+                    num_eval_failed += session_eval_failed
                 except Exception as e:
                     if strict:
                         pbar.close()
                         raise
-                    if message.metadata.get("is_task") and is_online:
-                        num_eval_failed += 1
-                        print(
-                            "⚠️ Online evaluation fails for a task message "
-                            f"'{message.id}' for user '{user_id}': "
-                            f"{e.__class__.__name__}: {e}"
+                    num_add_failed += len(prepared_messages)
+                    print(
+                        "⚠️ The session is skipped because the memory layer "
+                        f"fails to add it for user '{user_id}': "
+                        f"{e.__class__.__name__}: {e}"
+                    )
+                finally:
+                    end_time = datetime.now()
+                    output["total_add_time"] += (end_time - start_time).total_seconds()
+                    output["num_messages"] += len(prepared_messages)
+                    pbar.update(len(prepared_messages))
+                    time.sleep(0.2)
+            else:
+                for message in prepared_messages:
+                    start_time = datetime.now()
+                    try:
+                        add_failed, eval_failed, eval_results = _process_single_message(
+                            message,
+                            layer,
+                            user_id,
+                            strict,
+                            is_online,
+                            dataset_cls,
+                            online_eval_env,
                         )
-                    else:
-                        num_add_failed += 1
-                        print(
-                            "⚠️ The message is skipped because the memory layer "
-                            f"fails to add it for user '{user_id}': "
-                            f"{e.__class__.__name__}: {e}"
-                        )
-
-                end_time = datetime.now() 
-                output["total_add_time"] += (end_time - start_time).total_seconds()
-                output["num_messages"] += 1
-
-                pbar.update(1) 
-                time.sleep(0.2)
+                        num_add_failed += add_failed
+                        num_eval_failed += eval_failed
+                        output["eval_results"].extend(eval_results)
+                    except Exception as e:
+                        if strict:
+                            pbar.close()
+                            raise
+                        if message.metadata.get("is_task") and is_online:
+                            num_eval_failed += 1
+                            print(
+                                "⚠️ Online evaluation fails for a task message "
+                                f"'{message.id}' for user '{user_id}': "
+                                f"{e.__class__.__name__}: {e}"
+                            )
+                        else:
+                            num_add_failed += 1
+                            print(
+                                "⚠️ The message is skipped because the memory layer "
+                                f"fails to add it for user '{user_id}': "
+                                f"{e.__class__.__name__}: {e}"
+                            )
+                    finally:
+                        end_time = datetime.now()
+                        output["total_add_time"] += (end_time - start_time).total_seconds()
+                        output["num_messages"] += 1
+                        pbar.update(1)
+                        time.sleep(0.2)
         pbar.close()
 
         total_failed = num_add_failed + num_eval_failed
