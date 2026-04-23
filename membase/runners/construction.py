@@ -35,6 +35,33 @@ from typing import Any, Callable
 _LOCK = threading.Lock()
 
 
+def _normalize_user_scoped_config(
+    layer_type: str,
+    user_id: str,
+    config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Scope save-dir-derived config fields to one user before model validation."""
+    cfg = deepcopy(config) or {}
+    base_save_dir = cfg.get("save_dir", "memory")
+    user_save_dir = f"{base_save_dir}/{user_id}"
+
+    cfg["user_id"] = user_id
+    cfg["save_dir"] = user_save_dir
+
+    if layer_type == "LightMem":
+        old_qdrant_path = cfg.get("qdrant_path")
+        old_default_qdrant_path = os.path.join(base_save_dir, "qdrant")
+        if old_qdrant_path is None or old_qdrant_path == old_default_qdrant_path:
+            cfg["qdrant_path"] = os.path.join(user_save_dir, "qdrant")
+    elif layer_type == "SimpleMem":
+        old_db_path = cfg.get("db_path")
+        old_default_db_path = os.path.join(base_save_dir, "lancedb")
+        if old_db_path is None or old_db_path == old_default_db_path:
+            cfg["db_path"] = os.path.join(user_save_dir, "lancedb")
+
+    return cfg
+
+
 def _process_single_message(
     message: Message,
     layer: Any,
@@ -141,11 +168,7 @@ def memory_construction(
             the dataset is an online dataset, the evaluation results are also
             included.
     """
-    config = deepcopy(config) or {}
-    # It overrides the user id in the config. 
-    config["user_id"] = user_id 
-    # Each user has a distinct config directory.
-    config["save_dir"] = f"{config['save_dir']}/{user_id}" 
+    config = _normalize_user_scoped_config(layer_type, user_id, config)
 
     # Use lazy mapping to load config and layer classes.
     config_cls = CONFIG_MAPPING[layer_type]
