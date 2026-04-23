@@ -9,6 +9,7 @@ judge_model="deepseek-chat"
 qa_batch_size=4
 judge_batch_size=4
 api_config_path="examples/evaluate_lightmem_on_locomo/api_config.json"
+prompt_template="examples/evaluate_lightmem_on_locomo/qa_prompt.py:get_lightmem_qa_prompt"
 # ========================================================
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -20,4 +21,5 @@ python memory_evaluation.py \
     --judge-model "$judge_model" \
     --qa-batch-size "$qa_batch_size" \
     --judge-batch-size "$judge_batch_size" \
-    --api-config-path "$api_config_path"
+    --api-config-path "$api_config_path" \
+    --prompt-template "$prompt_template"

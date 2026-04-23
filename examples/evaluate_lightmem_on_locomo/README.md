@@ -44,6 +44,7 @@ This example uses:
 - `deepseek-chat` for construction
 - `Qwen3-Embedding-8B` via local vLLM for embeddings
 - DeepSeek API again for Stage 3 QA and judge
+- A LightMem-specific LoCoMo QA prompt for Stage 3
 
 By default, each user's memory is stored under:
 
@@ -78,10 +79,11 @@ This stage reads the standardized dataset produced by Stage 1 and writes retriev
 bash examples/evaluate_lightmem_on_locomo/run_evaluation.sh
 ```
 
-This keeps using MemBase's QA and judge pipeline with `deepseek-chat`. The LightMem adapter only handles memory construction and retrieval.
+This keeps using MemBase's QA and judge pipeline with `deepseek-chat`. The LightMem adapter only handles memory construction and retrieval, but the Stage 3 example now passes a dedicated LoCoMo QA prompt through [`qa_prompt.py`](qa_prompt.py) so the evaluation prompt is closer to LightMem's intended task framing.
 
 ## Notes
 
 - This integration is **external dependency + adapter**, not a vendored copy of LightMem.
 - v1 targets the root text pipeline with `pre_compress`, `topic_segment`, `offline update`, local Qdrant persistence, and optional summary construction.
 - Summary retrieval is optional. When `enable_summary=true`, the adapter runs LightMem summarization during `flush()` and mixes summary hits into the stage 2 retrieval budget.
+- If you want a strict cross-method ablation with one shared Stage 3 prompt, remove `--prompt-template` from [`run_evaluation.sh`](run_evaluation.sh) to fall back to MemBase's default QA prompt.

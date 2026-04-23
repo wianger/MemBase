@@ -42,6 +42,7 @@ This example uses:
 - `deepseek-chat` for construction
 - `Qwen3-Embedding-8B` via local vLLM for embeddings
 - DeepSeek API again for Stage 3 QA and judge
+- A SimpleMem-specific LoCoMo QA prompt for Stage 3
 
 By default, each user's memory is stored under:
 
@@ -76,4 +77,10 @@ This stage reads the standardized dataset produced by Stage 1 and writes retriev
 bash examples/evaluate_simplemem_on_locomo/run_evaluation.sh
 ```
 
-This keeps using MemBase's QA and judge pipeline with `deepseek-chat`. The vendored SimpleMem integration only handles memory construction and retrieval.
+This keeps using MemBase's QA and judge pipeline with `deepseek-chat`. The vendored SimpleMem integration only handles memory construction and retrieval, but the Stage 3 example now passes a dedicated LoCoMo QA prompt through [`qa_prompt.py`](qa_prompt.py) so the answer style better matches SimpleMem's retrieval context.
+
+The prompt is intentionally adapted for MemBase: it asks for direct short answers and does not require JSON output, because MemBase Stage 3 sends the answer text directly into its judge pipeline.
+
+## Notes
+
+- If you want a strict cross-method ablation with one shared Stage 3 prompt, remove `--prompt-template` from [`run_evaluation.sh`](run_evaluation.sh) to fall back to MemBase's default QA prompt.
