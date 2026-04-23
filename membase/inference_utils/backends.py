@@ -46,12 +46,11 @@ class OpenAIClient(OpenAI):
                 A dictionary containing raw text, post-processed result, and optionally 
                 reasoning content if the model returns reasoning tokens.
         """
-        response_content = None 
-        counter = 0 
-        content = ''
-        reasoning_content = None 
+        last_error: Exception | None = None
+        content = ""
+        reasoning_content = None
 
-        while response_content is None and counter <= max_tolerance:
+        for _ in range(max_tolerance + 1):
             try:
                 response = self.chat.completions.create(
                     model=model,
@@ -84,20 +83,23 @@ class OpenAIClient(OpenAI):
                     content = response.choices[0].message.content
                     if hasattr(response.choices[0].message, "reasoning_content"):
                         reasoning_content = response.choices[0].message.reasoning_content 
+                response_content = (
+                    content if post_processor is None else post_processor(content)
+                )
+                outputs = {
+                    "content": content, 
+                    "processed_content": response_content,
+                }
+                if reasoning_content is not None:
+                    outputs["reasoning_content"] = reasoning_content
+                return outputs
             except Exception as e:
                 print(e)
-            finally: 
-                response_content = content if post_processor is None else post_processor(content)
-                counter += 1
-        
-        outputs = {
-            "content": content, 
-            "processed_content": response_content,
-        }
-        if reasoning_content is not None:
-            outputs["reasoning_content"] = reasoning_content
+                last_error = e
 
-        return outputs
+        raise RuntimeError(
+            f"OpenAI text generation failed after {max_tolerance + 1} attempt(s)."
+        ) from last_error
 
 
 def openai_api_batch_inference(

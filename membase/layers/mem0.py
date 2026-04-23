@@ -109,22 +109,19 @@ class Mem0Layer(MemBaseLayer):
         )
 
         # Following Mem0's implementation (https://github.com/mem0ai/mem0/blob/main/evaluation/src/memzero/add.py#L83).
-        try:
-            self.memory_layer.add(
-                messages={
-                    "content": text,
-                    "role": message.role,
-                    "name": message.name,
-                },
-                user_id=self.config.user_id,
-                metadata={
-                    "timestamp": message.timestamp, 
-                    "speakers": message.name,
-                },
-                **kwargs, 
-            )
-        except Exception as e:
-            print(f"Error in add_message method in Mem0Layer: \n\t{e.__class__.__name__}: {e}")
+        self.memory_layer.add(
+            messages={
+                "content": text,
+                "role": message.role,
+                "name": message.name,
+            },
+            user_id=self.config.user_id,
+            metadata={
+                "timestamp": message.timestamp, 
+                "speakers": message.name,
+            },
+            **kwargs, 
+        )
 
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
         message_level = kwargs.pop("message_level", True)

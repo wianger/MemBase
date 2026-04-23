@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
@@ -203,6 +204,16 @@ class SearchRunner:
                 return json.load(f)
         return None
 
+    def _build_memory_config(self) -> dict[str, Any]:
+        """Return a concrete memory config, filling in defaults when omitted."""
+        config = self._resolve_memory_config()
+        config_cls = CONFIG_MAPPING[self.config.memory_type]
+        if config is None:
+            resolved = config_cls(user_id="guest")
+        else:
+            resolved = config_cls(**config)
+        return resolved.model_dump(mode="python")
+
     def run(self) -> list[dict[str, Any]]:
         """Execute the memory retrieval pipeline.
 
@@ -212,7 +223,7 @@ class SearchRunner:
                 containing the retrieved memories, the question-answer pair, and the user id.
         """
         cfg = self.config
-        config = self._resolve_memory_config()
+        config = self._build_memory_config()
 
         # Prepare the dataset using lazy mapping.
         ds_cls = DATASET_MAPPING[cfg.dataset_type]
@@ -262,6 +273,7 @@ class SearchRunner:
         output_path = (
             f"{config['save_dir']}/{cfg.top_k}_{start_idx}_{end_idx}.json"
         )
+        os.makedirs(config["save_dir"], exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(
                 retrievals,

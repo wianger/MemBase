@@ -104,7 +104,7 @@ class LLMJudge(BaseMetric):
 
             for local_pos, global_idx in enumerate(indices):
                 content = judge_responses[local_pos].get("processed_content")
-                if content is None:
+                if content is None or (isinstance(content, str) and content.strip() == ""):
                     raise ValueError(
                         "The judge model's response for question "
                         f"'{qa_pairs[global_idx].question}' is empty."

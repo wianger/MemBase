@@ -240,7 +240,7 @@ class EvaluationRunner:
         predictions = []
         for resp in qa_responses:
             pred = resp.get("processed_content")
-            if pred is None:
+            if pred is None or (isinstance(pred, str) and pred.strip() == ""):
                 raise ValueError(
                     "The question-answering model returns an empty prediction."
                 )

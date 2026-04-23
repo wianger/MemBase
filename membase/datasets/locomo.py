@@ -1,4 +1,5 @@
 import json
+import json as json_lib
 from datetime import datetime
 from .base import MemBaseDataset
 from ..model_types.dataset import (
@@ -185,4 +186,23 @@ class LoCoMo(MemBaseDataset):
 
     @classmethod
     def parse_judge_response(cls, content: str) -> float:
-        return float("correct" in content.lower())
+        text = content.strip()
+
+        try:
+            obj = json_lib.loads(text)
+            label = str(obj.get("label", "")).strip().lower()
+            if label == "correct":
+                return 1.0
+            if label == "wrong":
+                return 0.0
+        except Exception:
+            pass
+
+        upper_text = text.upper()
+        if "INCORRECT" in upper_text:
+            return 0.0
+        if "WRONG" in upper_text:
+            return 0.0
+        if "CORRECT" in upper_text:
+            return 1.0
+        return 0.0

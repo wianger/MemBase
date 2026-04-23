@@ -77,10 +77,11 @@ def memory_construction(
             evaluation is skipped even for task messages.
 
     Returns:
-        `dict[str, float | list[OnlineEvalResult]]`: 
-            A dictionary containing the total time and the average time per operation of 
-            adding new message. If the dataset is an online dataset, the evaluation results are 
-            also included.
+        `dict[str, float | int | list[OnlineEvalResult]]`:
+            A dictionary containing the total construction time, the total number
+            of processed messages, and the average time per message addition. If
+            the dataset is an online dataset, the evaluation results are also
+            included.
     """
     config = deepcopy(config) or {}
     # It overrides the user id in the config. 
@@ -108,6 +109,7 @@ def memory_construction(
     output = {
         "total_add_time": 0.0,
         "avg_add_time": 0.0,
+        "num_messages": 0,
         "eval_results": [],
     }
 
@@ -176,6 +178,7 @@ def memory_construction(
 
                 end_time = datetime.now() 
                 output["total_add_time"] += (end_time - start_time).total_seconds()
+                output["num_messages"] += 1
 
                 pbar.update(1) 
                 time.sleep(0.2)
@@ -204,7 +207,7 @@ def memory_construction(
     with _LOCK:
         layer.save_memory() 
         layer.cleanup()
-    output["avg_add_time"] = output["total_add_time"] / len(trajectory)
+    output["avg_add_time"] = output["total_add_time"] / max(output["num_messages"], 1)
 
     return output 
 
@@ -326,6 +329,16 @@ class ConstructionRunner:
                 return json.load(f)
         return None
 
+    def _build_memory_config(self) -> dict[str, Any]:
+        """Return a concrete memory config, filling in defaults when omitted."""
+        config = self._resolve_memory_config()
+        config_cls = CONFIG_MAPPING[self.config.memory_type]
+        if config is None:
+            resolved = config_cls(user_id="guest")
+        else:
+            resolved = config_cls(**config)
+        return resolved.model_dump(mode="python")
+
     def run(self) -> list[dict[str, float | list[OnlineEvalResult]]]:
         """Execute the memory construction pipeline.
 
@@ -336,15 +349,12 @@ class ConstructionRunner:
                 If the dataset is an online dataset, the evaluation results are also included.
         """
         cfg = self.config
-        config = self._resolve_memory_config()
+        config = self._build_memory_config()
 
         # Get a dummy configuration to infer the corresponding LLM being used.
         # Use lazy mapping to load config class.
         config_cls = CONFIG_MAPPING[cfg.memory_type]
-        if config is None:
-            dummy_config = config_cls(user_id="guest")
-        else:
-            dummy_config = config_cls(**config)
+        dummy_config = config_cls(**config)
 
         # If token cost file exists, load it.
         if os.path.exists(cfg.token_cost_save_filename + ".json"):
@@ -467,23 +477,23 @@ class ConstructionRunner:
 
         # Print construction timing statistics.
         total_time = 0.0
-        avg_time_per_add_session = 0.0
+        avg_time_per_add_message = 0.0
         num_valid_trajectories = 0
         for result in results:
             # Statistics on the newly processed trajectories. 
             if result["total_add_time"] > 0:
                 total_time += result["total_add_time"]
-                avg_time_per_add_session += result["avg_add_time"]
+                avg_time_per_add_message += result["avg_add_time"]
                 num_valid_trajectories += 1
         avg_time = total_time / max(num_valid_trajectories, 1)
-        avg_time_per_add_session = avg_time_per_add_session / max(num_valid_trajectories, 1)
+        avg_time_per_add_message = avg_time_per_add_message / max(num_valid_trajectories, 1)
         print(
             f"For {cfg.memory_type}, the average time per trajectory "
             f"({num_valid_trajectories} in {len(results)}) is {avg_time:.2f} seconds."
         )
         print(
-            f"For {cfg.memory_type}, the average time per operation of adding new session "
-            f"is {avg_time_per_add_session:.2f} seconds."
+            f"For {cfg.memory_type}, the average time per added message "
+            f"is {avg_time_per_add_message:.2f} seconds."
         )
 
         # Aggregate and save online evaluation results.
@@ -502,7 +512,7 @@ class ConstructionRunner:
 
                     all_eval_entries.append(
                         {
-                            "user_id": user_id,
+                            "user_id": result["user_id"],
                             "metrics": metrics,
                             "rollout": [
                                 msg.model_dump(mode="python") for msg in rollout
