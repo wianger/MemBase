@@ -21,7 +21,7 @@
     "embedding_provider": "openai",
     "embedding_model": "Qwen3-Embedding-8B",
     "embedding_dims": 4096,
-    "embedding_device": "cuda:0",
+    "embedding_device": "cpu",
     "embedding_model_kwargs": {},
     "embedding_api_key": "EMPTY",
     "embedding_base_url": "http://localhost:8008/v1",
