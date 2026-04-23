@@ -1,0 +1,4 @@
+{
+    "api_keys": ["YOUR_OPENAI_API_KEY"],
+    "base_urls": ["YOUR_OPENAI_API_BASE"]
+}
