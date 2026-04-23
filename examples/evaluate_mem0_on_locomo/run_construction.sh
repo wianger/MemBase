@@ -6,10 +6,10 @@
 # ========================================================
 memory_type="Mem0"
 dataset_type="LoCoMo"
-dataset_path="YOUR_DATASET_PATH"
+dataset_path="datasets/locomo/data/locomo10.json"
 config_path="examples/evaluate_mem0_on_locomo/mem0_config.json"
-num_workers=2
-sample_size=2
+num_workers=10
+sample_size=10
 log_dir="mem0_logs"
 token_cost_file="token_cost_mem0"
 # ========================================================

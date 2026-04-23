@@ -6,8 +6,8 @@ search_results_path="mem0_output/10_0_2.json"  # Adjust based on actual output f
 dataset_type="LoCoMo"
 qa_model="deepseek-chat"
 judge_model="deepseek-chat"
-qa_batch_size=4
-judge_batch_size=4
+qa_batch_size=10
+judge_batch_size=10
 api_config_path="examples/evaluate_mem0_on_locomo/api_config.json"
 prompt_template="examples/evaluate_mem0_on_locomo/qa_prompt.py:get_mem0_qa_prompt"
 # ========================================================

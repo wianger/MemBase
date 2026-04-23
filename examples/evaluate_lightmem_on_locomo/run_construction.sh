@@ -4,10 +4,10 @@
 # ========================================================
 memory_type="LightMem"
 dataset_type="LoCoMo"
-dataset_path="YOUR_DATASET_PATH"
+dataset_path="datasets/locomo/data/locomo10.json"
 config_path="examples/evaluate_lightmem_on_locomo/lightmem_config.json"
-num_workers=2
-sample_size=2
+num_workers=10
+sample_size=10
 log_dir="lightmem_logs"
 token_cost_file="token_cost_lightmem"
 # ========================================================

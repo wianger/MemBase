@@ -9,7 +9,7 @@ dataset_type="LoCoMo"
 dataset_path="naive_rag_output/LoCoMo_stage_1.json"
 config_path="examples/evaluate_naive_rag_on_locomo/naive_rag_config.json"
 question_filter_path="examples/evaluate_naive_rag_on_locomo/question_filter.py:filter_adversarial"
-num_workers=2
+num_workers=10
 top_k=10
 # ========================================================
 set -euo pipefail

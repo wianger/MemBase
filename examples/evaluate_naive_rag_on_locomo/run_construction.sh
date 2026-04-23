@@ -4,10 +4,10 @@
 # ========================================================
 memory_type="NaiveRAG"
 dataset_type="LoCoMo"
-dataset_path="YOUR_DATASET_PATH"
+dataset_path="datasets/locomo/data/locomo10.json"
 config_path="examples/evaluate_naive_rag_on_locomo/naive_rag_config.json"
-num_workers=2
-sample_size=2
+num_workers=10
+sample_size=10
 log_dir="naive_rag_logs"
 token_cost_file="token_cost_naive_rag"
 # ========================================================

@@ -1,0 +1,3 @@
+[submodule "dataset/locomo"]
+	path = dataset/locomo
+	url = https://github.com/snap-research/locomo.git
