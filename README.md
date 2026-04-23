@@ -97,6 +97,7 @@ Using the retrieved memories as context, a question-answering model generates an
 - [MemOS](https://github.com/MemTensor/MemOS)
 - [EverMemOS](https://github.com/EverMind-AI/EverMemOS)
 - [HippoRAG2](https://github.com/OSU-NLP-Group/HippoRAG)
+- `SimpleMem` (vendored text-only integration)
 - [Long-Context](membase/layers/long_context.py)
 - [NaiveRAG](membase/layers/naive_rag.py)
 
@@ -119,6 +120,7 @@ See the [`examples/`](examples/) directory for step-by-step tutorials:
 | [Evaluate A-MEM on LongMemEval](examples/evaluate_amem_on_longmemeval/) | Run the full three-stage evaluation pipeline (construction, retrieval, QA) using A-MEM on LongMemEval |
 | [Evaluate Mem0 on LoCoMo](examples/evaluate_mem0_on_locomo/) | Evaluate Mem0 (with Kuzu graph store) on LoCoMo, with a custom question-answering prompt and adversarial question filtering |
 | [Evaluate MemOS on LoCoMo](examples/evaluate_memos_on_locomo/) | Evaluate MemOS with vLLM-served embedding on LoCoMo, with adversarial question filtering |
+| [Evaluate SimpleMem on LoCoMo](examples/evaluate_simplemem_on_locomo/) | Evaluate the vendored SimpleMem text backend on LoCoMo using the standard MemBase three-stage pipeline |
 | [Download Models](examples/download_models/) | Download pre-trained embedding and reranker models from Hugging Face |
 
 ---

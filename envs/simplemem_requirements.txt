@@ -1,0 +1,9 @@
+lancedb
+pyarrow
+openai
+sentence-transformers
+dateparser
+tantivy
+numpy
+litellm
+

@@ -1,0 +1,24 @@
+{
+    "user_id": "guest",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "base_url": "YOUR_OPENAI_API_BASE",
+    "llm_model": "gpt-4.1-mini",
+    "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
+    "embedding_dimension": 1024,
+    "window_size": 40,
+    "overlap_size": 2,
+    "semantic_top_k": 25,
+    "keyword_top_k": 5,
+    "structured_top_k": 5,
+    "enable_parallel_processing": true,
+    "max_parallel_workers": 16,
+    "enable_parallel_retrieval": true,
+    "max_retrieval_workers": 8,
+    "enable_planning": true,
+    "enable_reflection": true,
+    "max_reflection_rounds": 2,
+    "use_streaming": true,
+    "use_json_format": false,
+    "save_dir": "simplemem_output"
+}
+
