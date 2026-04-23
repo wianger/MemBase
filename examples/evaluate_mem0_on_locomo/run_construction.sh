@@ -8,8 +8,8 @@ memory_type="Mem0"
 dataset_type="LoCoMo"
 dataset_path="dataset/locomo/data/locomo10.json"
 config_path="examples/evaluate_mem0_on_locomo/mem0_config.json"
-num_workers=4
-sample_size=4
+num_workers=10
+sample_size=10
 log_dir="output/mem0_logs"
 token_cost_file="${log_dir}/token_cost_mem0"
 # ========================================================

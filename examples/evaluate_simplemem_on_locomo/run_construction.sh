@@ -6,8 +6,8 @@ memory_type="SimpleMem"
 dataset_type="LoCoMo"
 dataset_path="dataset/locomo/data/locomo10.json"
 config_path="examples/evaluate_simplemem_on_locomo/simplemem_config.json"
-num_workers=4
-sample_size=4
+num_workers=10
+sample_size=10
 log_dir="output/simplemem_logs"
 token_cost_file="${log_dir}/token_cost_simplemem"
 # ========================================================

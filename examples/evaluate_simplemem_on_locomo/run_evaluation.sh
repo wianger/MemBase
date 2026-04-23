@@ -6,8 +6,8 @@ search_results_path="simplemem_output/10_0_10.json"
 dataset_type="LoCoMo"
 qa_model="deepseek-chat"
 judge_model="deepseek-chat"
-qa_batch_size=4
-judge_batch_size=4
+qa_batch_size=10
+judge_batch_size=10
 api_config_path="examples/evaluate_simplemem_on_locomo/api_config.json"
 prompt_template="examples/evaluate_simplemem_on_locomo/qa_prompt.py:get_simplemem_qa_prompt"
 # ========================================================
