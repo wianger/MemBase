@@ -4,7 +4,7 @@
 # ========================================================
 memory_type="SimpleMem"
 dataset_type="LoCoMo"
-dataset_path="datasets/locomo/data/locomo10.json"
+dataset_path="dataset/locomo/data/locomo10.json"
 config_path="examples/evaluate_simplemem_on_locomo/simplemem_config.json"
 num_workers=10
 sample_size=10

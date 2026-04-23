@@ -4,7 +4,7 @@
 # ========================================================
 memory_type="NaiveRAG"
 dataset_type="LoCoMo"
-dataset_path="datasets/locomo/data/locomo10.json"
+dataset_path="dataset/locomo/data/locomo10.json"
 config_path="examples/evaluate_naive_rag_on_locomo/naive_rag_config.json"
 num_workers=10
 sample_size=10
