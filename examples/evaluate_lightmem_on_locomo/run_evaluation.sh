@@ -2,7 +2,7 @@
 # Stage 3: Question Answering & Evaluation for LightMem on LoCoMo.
 # Please modify the variables below to fit your setup.
 # ========================================================
-search_results_path="lightmem_output/10_0_2.json"
+search_results_path="lightmem_output/10_0_10.json"
 dataset_type="LoCoMo"
 qa_model="deepseek-chat"
 judge_model="deepseek-chat"
