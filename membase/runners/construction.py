@@ -62,6 +62,32 @@ def _normalize_user_scoped_config(
     return cfg
 
 
+def _resolve_construction_workers(
+    memory_type: str,
+    num_workers: int,
+    config_dict: dict[str, Any] | None,
+) -> tuple[int, str | None]:
+    if memory_type != "LightMem":
+        return num_workers, None
+
+    cfg = deepcopy(config_dict) or {}
+    config_cls = CONFIG_MAPPING[memory_type]
+    lightmem_config = config_cls(**_normalize_user_scoped_config(memory_type, "worker-probe", cfg))
+
+    if not getattr(lightmem_config, "should_serialize_construction", lambda: False)():
+        return num_workers, None
+
+    if num_workers <= 1:
+        return num_workers, None
+
+    warning = (
+        "LightMem construction workers are clamped from "
+        f"{num_workers} to 1 because LLMLingua-2 model initialization is "
+        "serialized by default to avoid concurrent GPU initialization failures."
+    )
+    return 1, warning
+
+
 def _process_single_message(
     message: Message,
     layer: Any,
@@ -547,9 +573,18 @@ class ConstructionRunner:
         if start_idx >= end_idx:
             raise ValueError("The starting index must be less than the ending index.")
 
+        effective_num_workers, worker_warning = _resolve_construction_workers(
+            cfg.memory_type,
+            cfg.num_workers,
+            config,
+        )
+        if worker_warning is not None:
+            print(f"⚠️ {worker_warning}")
+            print()
+
         # Dispatch per-trajectory construction to a thread pool.
         results = []
-        with ThreadPoolExecutor(max_workers=cfg.num_workers) as executor:
+        with ThreadPoolExecutor(max_workers=effective_num_workers) as executor:
             future_to_user_id = {}
             for trajectory, _ in zip(*dataset[start_idx:end_idx]):
                 # Note that this code is for academic purpose, the embedding model may be loaded multiple times. 

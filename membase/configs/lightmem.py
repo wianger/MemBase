@@ -39,6 +39,13 @@ class LightMemConfig(MemBaseConfig):
         description="Target device for LLMLingua-2. Defaults to `embedding_device`.",
     )
     llmlingua_model_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
+    serialize_model_init: bool = Field(
+        default=True,
+        description=(
+            "Serialize LightMem construction when LLMLingua-2 is enabled to "
+            "avoid concurrent GPU model initialization."
+        ),
+    )
     compress_rate: float = Field(default=0.8)
     compress_target_token: int = Field(default=-1)
     topic_segment: bool = Field(default=True)
@@ -112,6 +119,9 @@ class LightMemConfig(MemBaseConfig):
 
     def get_llm_models(self) -> list[str]:
         return [self.llm_model]
+
+    def should_serialize_construction(self) -> bool:
+        return self.serialize_model_init and self.pre_compress
 
     def build_lightmem_config(self) -> dict[str, Any]:
         """Build the nested configuration dict expected by LightMem."""

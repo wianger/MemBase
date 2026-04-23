@@ -66,6 +66,8 @@ This matches MemBase's per-user runner layout and avoids cross-user collisions.
 bash examples/evaluate_lightmem_on_locomo/run_construction.sh
 ```
 
+The example construction script uses `num_workers=1`. This is intentional: when LightMem uses LLMLingua-2 pre-compression, MemBase now serializes construction by default to avoid concurrent GPU model initialization failures.
+
 This samples 2 trajectories and saves the standardized dataset to `lightmem_output/LoCoMo_stage_1.json`.
 
 ## Step 4: Run Memory Search
@@ -93,4 +95,5 @@ This keeps using MemBase's QA and judge pipeline with `deepseek-chat`. The Light
 - This integration is **external dependency + adapter**, not a vendored copy of LightMem.
 - v1 targets the root text pipeline with `pre_compress`, `topic_segment`, `offline update`, local Qdrant persistence, and optional summary construction.
 - Summary retrieval is optional. When `enable_summary=true`, the adapter runs LightMem summarization during `flush()` and mixes summary hits into the stage 2 retrieval budget.
+- LightMem construction with LLMLingua-2 is serialized by default even if a higher `--num-workers` value is requested. Search and evaluation worker counts are unchanged.
 - If you want a strict cross-method ablation with one shared Stage 3 prompt, remove `--prompt-template` from [`run_evaluation.sh`](run_evaluation.sh) to fall back to MemBase's default QA prompt.
