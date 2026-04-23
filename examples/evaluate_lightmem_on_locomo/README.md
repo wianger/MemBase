@@ -37,6 +37,13 @@ Edit [`lightmem_config.json`](lightmem_config.json) and replace:
 - `YOUR_DEEPSEEK_API_KEY`
 - `llmlingua_model_path`
 
+Recommended LLMLingua settings:
+
+- CPU run: set `"llmlingua_device": "cpu"` with `"llmlingua_model_kwargs": {"dtype": "float32", "attn_implementation": "eager"}`
+- GPU run: set `"llmlingua_device": "cuda:0"` with `"llmlingua_model_kwargs": {"dtype": "auto", "attn_implementation": "eager"}`
+
+These settings avoid the newer `transformers/accelerate` meta-tensor loading path that can break LLMLingua-2 when it resizes token embeddings.
+
 The full list of supported fields lives in [`membase/configs/lightmem.py`](/home/wiang/MemBase/membase/configs/lightmem.py).
 
 This example uses:

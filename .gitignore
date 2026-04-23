@@ -251,6 +251,4 @@ $RECYCLE.BIN/
 
 .codex
 pretrained_models/
-*logs/
-*output/
-token_cost*
+output/

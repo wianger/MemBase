@@ -34,6 +34,11 @@ class LightMemConfig(MemBaseConfig):
         default="microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank",
         description="Local path or supported model id for LLMLingua-2.",
     )
+    llmlingua_device: str | None = Field(
+        default=None,
+        description="Target device for LLMLingua-2. Defaults to `embedding_device`.",
+    )
+    llmlingua_model_kwargs: dict[str, JsonValue] = Field(default_factory=dict)
     compress_rate: float = Field(default=0.8)
     compress_target_token: int = Field(default=-1)
     topic_segment: bool = Field(default=True)
@@ -110,6 +115,9 @@ class LightMemConfig(MemBaseConfig):
 
     def build_lightmem_config(self) -> dict[str, Any]:
         """Build the nested configuration dict expected by LightMem."""
+        llmlingua_device = self.llmlingua_device or self.embedding_device
+        llmlingua_model_config: dict[str, Any] = dict(self.llmlingua_model_kwargs)
+
         text_embedder_configs: dict[str, Any] = {
             "model": self.embedding_model,
             "embedding_dims": self.embedding_dims,
@@ -134,8 +142,9 @@ class LightMemConfig(MemBaseConfig):
                 "configs": {
                     "llmlingua_config": {
                         "model_name": self.llmlingua_model_path,
-                        "device_map": self.embedding_device,
+                        "device_map": llmlingua_device,
                         "use_llmlingua2": True,
+                        "model_config": llmlingua_model_config,
                     },
                     "compress_config": {
                         "instruction": "",
@@ -148,6 +157,11 @@ class LightMemConfig(MemBaseConfig):
             "precomp_topic_shared": self.precomp_topic_shared,
             "topic_segmenter": {
                 "model_name": "llmlingua-2",
+                "configs": {
+                    "model_name": self.llmlingua_model_path,
+                    "device_map": llmlingua_device,
+                    "model_config": dict(llmlingua_model_config),
+                },
             },
             "messages_use": self.messages_use,
             "metadata_generate": self.metadata_generate,
