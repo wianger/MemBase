@@ -245,6 +245,13 @@ class Mem0Layer(MemBaseLayer):
                 f"does not match the user id ({user_id}) in the function call."
             )
 
+        persisted_layer_type = config_dict.pop("layer_type", None)
+        if persisted_layer_type is not None and persisted_layer_type != self.layer_type:
+            raise ValueError(
+                f"The layer type in the config file ({persisted_layer_type}) "
+                f"does not match the current memory layer ({self.layer_type})."
+            )
+
         config = Mem0Config(**config_dict)
 
         self.cleanup()
