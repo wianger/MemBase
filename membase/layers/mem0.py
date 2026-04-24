@@ -1,126 +1,133 @@
-import os
-os.environ["MEM0_TELEMETRY"] = "False" # Disable telemetry.
-
 import json
-from mem0 import Memory
-from mem0.configs.base import MemoryConfig
-from mem0.memory.storage import SQLiteManager
-from mem0.utils.factory import (
-    EmbedderFactory,
-    GraphStoreFactory,
-    LlmFactory,
-    VectorStoreFactory,
-    RerankerFactory,
-)
-from .base import MemBaseLayer
-from ..utils import (
-    PatchSpec,
-    make_attr_patch,
-    token_monitor,
-)
-from ..configs.mem0 import Mem0Config
-from ..model_types.memory import MemoryEntry
-from ..model_types.dataset import Message
+import os
+import warnings
+from importlib.util import find_spec
 from typing import Any, ClassVar
 
+os.environ["MEM0_TELEMETRY"] = "False"
 
-class Mem0Memory(Memory):
-    """A thin subclass of ``mem0.Memory`` that skips telemetry initialization.
+from mem0 import Memory
 
-    The upstream ``Memory.__init__`` creates an additional Qdrant collection
-    (``mem0migrations``) solely for anonymous usage telemetry via PostHog.
-    This is unnecessary for evaluation and introduces extra I/O and potential
-    lock contention when running multiple instances in parallel."""
-
-    def __init__(self, config: MemoryConfig = MemoryConfig()) -> None:
-        self.config = config
-
-        self.custom_fact_extraction_prompt = self.config.custom_fact_extraction_prompt
-        self.custom_update_memory_prompt = self.config.custom_update_memory_prompt
-        self.embedding_model = EmbedderFactory.create(
-            self.config.embedder.provider,
-            self.config.embedder.config,
-            self.config.vector_store.config,
-        )
-        self.vector_store = VectorStoreFactory.create(
-            self.config.vector_store.provider, 
-            self.config.vector_store.config,
-        )
-        self.llm = LlmFactory.create(
-            self.config.llm.provider, 
-            self.config.llm.config,
-        )
-        self.db = SQLiteManager(self.config.history_db_path)
-        self.collection_name = self.config.vector_store.config.collection_name
-        self.api_version = self.config.version
-
-        # Initialize reranker if configured.
-        self.reranker = None
-        if config.reranker:
-            self.reranker = RerankerFactory.create(
-                config.reranker.provider,
-                config.reranker.config,
-            )
-
-        self.enable_graph = False
-
-        if self.config.graph_store.config:
-            provider = self.config.graph_store.provider
-            self.graph = GraphStoreFactory.create(provider, self.config)
-            self.enable_graph = True
-        else:
-            self.graph = None
-
-        # Telemetry is intentionally skipped. Set the attribute to `None`. 
-        self._telemetry_vector_store = None
+from .base import MemBaseLayer
+from ..configs.mem0 import Mem0Config
+from ..model_types.dataset import Message
+from ..model_types.memory import MemoryEntry
+from ..utils import PatchSpec, make_attr_patch, token_monitor
 
 
 class Mem0Layer(MemBaseLayer):
-
     layer_type: ClassVar[str] = "Mem0"
 
     def __init__(self, config: Mem0Config) -> None:
-        """Create an interface of Mem0. The implementation is based on the 
-        third-party library `mem0ai`."""
         self._init_layer(config)
         self.config = config
 
     def _init_layer(self, config: Mem0Config) -> None:
-        """Initialize the Mem0 layer.
-
-        Mem0 natively manages persistence via its Qdrant backend (``on_disk=True``), 
-        so no additional serialization is required.
-        
-        Args:
-            config (`Mem0Config`): 
-                The configuration for the Mem0 layer.
-        """
         mem0_config = config.build_mem0_config()
-        self.memory_layer = Mem0Memory.from_config(mem0_config)
+        self.memory_layer = Memory.from_config(mem0_config)
+        self._warn_hybrid_retrieval_status()
 
-    def add_message(self, message: Message, **kwargs: Any) -> None:
-        # Note that Mem0 does't use name field directly. 
-        # Therefore, we incorporate the name information into the message content 
-        # to retain speaker identity.
-        text = (
+    @staticmethod
+    def _module_available(module_name: str) -> bool:
+        try:
+            return find_spec(module_name) is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            return False
+
+    @classmethod
+    def _spacy_model_available(cls) -> bool:
+        if not cls._module_available("spacy"):
+            return False
+
+        try:
+            import spacy
+
+            return bool(spacy.util.is_package("en_core_web_sm"))
+        except Exception:
+            return cls._module_available("en_core_web_sm")
+
+    def _detect_hybrid_retrieval_status(self) -> tuple[str, list[str], list[str]]:
+        available_components = ["semantic vector search"]
+        degraded_reasons = []
+
+        vector_store = getattr(self.memory_layer, "vector_store", None)
+        has_keyword_search = hasattr(vector_store, "keyword_search")
+        has_bm25_slot = bool(getattr(vector_store, "_has_bm25_slot", False))
+        fastembed_installed = self._module_available("fastembed")
+        spacy_installed = self._module_available("spacy")
+        spacy_model_installed = self._spacy_model_available()
+
+        bm25_ready = False
+        if has_keyword_search and has_bm25_slot:
+            try:
+                bm25_ready = vector_store._get_bm25_encoder() is not None
+            except Exception:
+                bm25_ready = False
+
+        if bm25_ready:
+            available_components.append("BM25 keyword search")
+        else:
+            if not has_keyword_search:
+                degraded_reasons.append("vector store does not expose BM25 keyword search")
+            elif not has_bm25_slot:
+                degraded_reasons.append(
+                    "current Qdrant collection has no 'bm25' sparse slot; use a fresh rebuild to enable BM25"
+                )
+            elif not fastembed_installed:
+                degraded_reasons.append("fastembed is not installed")
+            else:
+                degraded_reasons.append("BM25 encoder is unavailable")
+
+        if spacy_installed and spacy_model_installed:
+            available_components.append("entity boost")
+        else:
+            if not spacy_installed:
+                degraded_reasons.append("spaCy is not installed")
+            elif not spacy_model_installed:
+                degraded_reasons.append("spaCy model 'en_core_web_sm' is not installed")
+            else:
+                degraded_reasons.append("entity extraction runtime is unavailable")
+
+        status = "full" if len(available_components) == 3 else "degraded"
+        return status, available_components, degraded_reasons
+
+    def _warn_hybrid_retrieval_status(self) -> None:
+        status, available_components, degraded_reasons = self._detect_hybrid_retrieval_status()
+        self.hybrid_retrieval_status = status
+        self.hybrid_retrieval_components = available_components
+
+        message = (
+            f"Mem0 hybrid retrieval status: {status} "
+            f"(available: {', '.join(available_components)})"
+        )
+        if degraded_reasons:
+            message += f". Missing or disabled pieces: {'; '.join(degraded_reasons)}."
+        else:
+            message += "."
+
+        warnings.warn(message, RuntimeWarning, stacklevel=2)
+
+    @staticmethod
+    def _format_message_content(message: Message) -> str:
+        return (
             f"{message.content}\nBelow is this message's metadata:\n"
             f"Speaker Name: {message.name}\n"
             f"Speaker Role: {message.role}\n"
         )
 
-        # Following Mem0's implementation (https://github.com/mem0ai/mem0/blob/main/evaluation/src/memzero/add.py#L83).
+    def add_message(self, message: Message, **kwargs: Any) -> None:
         self.memory_layer.add(
             messages={
-                "content": text,
+                "content": self._format_message_content(message),
                 "role": message.role,
                 "name": message.name,
             },
             user_id=self.config.user_id,
             metadata={
-                "timestamp": message.timestamp, 
+                "timestamp": message.timestamp,
                 "speakers": message.name,
             },
-            **kwargs, 
+            **kwargs,
         )
 
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
@@ -130,74 +137,65 @@ class Mem0Layer(MemBaseLayer):
                 "`message_level` must be a boolean to indicate whether the messages "
                 "are added to the memory layer message by message or as a whole."
             )
-        
+
         if message_level or len(messages) < 2:
             for message in messages:
                 self.add_message(message, **kwargs)
-        else:
-            new_messages = [] 
-            for message in messages:
-                msg_dict = message.model_dump(mode="python")
-                msg_dict["content"] = (
-                    f"{message.content}\nBelow is this message's metadata:\n"
-                    f"Speaker Name: {message.name}\n"
-                    f"Speaker Role: {message.role}\n"
-                )
-                new_messages.append(msg_dict)
-            
-            self.memory_layer.add(
-                messages=new_messages,
-                user_id=self.config.user_id,
-                metadata={
-                    "timestamp": f"[{messages[0].timestamp}, {messages[-1].timestamp}]",
-                    "speakers": ", ".join(
-                        sorted(
-                            set(
-                                [message.name for message in messages]
-                            )
-                        )
-                    ),
-                },
-                **kwargs, 
+            return
+
+        new_messages = []
+        for message in messages:
+            new_messages.append(
+                {
+                    "id": message.id,
+                    "content": self._format_message_content(message),
+                    "role": message.role,
+                    "name": message.name,
+                    "timestamp": message.timestamp,
+                    "metadata": message.metadata,
+                }
             )
 
-    def retrieve(self, query: str, k: int = 10, **kwargs: Any) -> list[MemoryEntry]:
-        result = self.memory_layer.search(
-            query=query,
+        self.memory_layer.add(
+            messages=new_messages,
             user_id=self.config.user_id,
-            limit=k,
+            metadata={
+                "timestamp": f"[{messages[0].timestamp}, {messages[-1].timestamp}]",
+                "speakers": ", ".join(sorted({message.name for message in messages})),
+            },
             **kwargs,
         )
 
-        memories = result["results"]
-        relations = result.get("relations")
+    def retrieve(self, query: str, k: int = 10, **kwargs: Any) -> list[MemoryEntry]:
+        search_kwargs = dict(kwargs)
+        filters = dict(search_kwargs.pop("filters", {}) or {})
+        filters.setdefault("user_id", self.config.user_id)
 
-        graph_text = ""
-        if relations:
-            graph_text = "\n".join(
-                ["### Graph Relations:"] + [str(rel) for rel in relations]
-            )
+        result = self.memory_layer.search(
+            query=query,
+            top_k=k,
+            filters=filters,
+            **search_kwargs,
+        )
 
         outputs = []
-        for item in memories:
+        for item in result["results"]:
             content = item["memory"]
-            metadata = {k: v for k, v in item.items() if k != "memory"}
+            metadata = {key: value for key, value in item.items() if key != "memory"}
             nested_metadata = metadata.get("metadata", {})
 
             parts = [f"Memory: {content}"]
             if nested_metadata.get("timestamp"):
                 parts.append(f"Time: {nested_metadata['timestamp']}")
-            if graph_text:
-                parts.append(graph_text)
-            formatted = "\n".join(parts)
 
             outputs.append(
                 MemoryEntry(
                     content=content,
                     metadata=metadata,
-                    formatted_content=formatted,
+                    formatted_content="\n".join(parts),
                 )
             )
+
         return outputs
 
     def delete(self, memory_id: str) -> bool:
@@ -212,8 +210,9 @@ class Mem0Layer(MemBaseLayer):
         if "data" not in kwargs:
             raise KeyError("`data` is required in `kwargs` for Mem0 layer.")
         data = kwargs.pop("data")
+        metadata = kwargs.pop("metadata", None)
         try:
-            self.memory_layer.update(memory_id, data)
+            self.memory_layer.update(memory_id, data, metadata=metadata)
             return True
         except Exception as e:
             print(f"Error in update method in Mem0Layer: \n\t{e.__class__.__name__}: {e}")
@@ -221,8 +220,6 @@ class Mem0Layer(MemBaseLayer):
 
     def save_memory(self) -> None:
         os.makedirs(self.config.save_dir, exist_ok=True)
-
-        # Write config.json.
         config_path = os.path.join(self.config.save_dir, "config.json")
         config_dict = {
             "layer_type": self.layer_type,
@@ -230,9 +227,6 @@ class Mem0Layer(MemBaseLayer):
         }
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config_dict, f, indent=4)
-
-        # The Qdrant vector store (on_disk=True) and the SQLite history DB persist
-        # automatically, so no additional serialization is needed here.
 
     def load_memory(self, user_id: str | None = None) -> bool:
         if user_id is None:
@@ -244,6 +238,7 @@ class Mem0Layer(MemBaseLayer):
 
         with open(config_path, "r", encoding="utf-8") as f:
             config_dict = json.load(f)
+
         if user_id != config_dict["user_id"]:
             raise ValueError(
                 f"The user id in the config file ({config_dict['user_id']}) "
@@ -252,57 +247,21 @@ class Mem0Layer(MemBaseLayer):
 
         config = Mem0Config(**config_dict)
 
-        # Release the existing Qdrant client's file lock before re-initialization.
         self.cleanup()
-
         self._init_layer(config)
         self.config = config
 
-        # Verify that the Qdrant store actually contains data for this user.
         try:
-            existing = self.memory_layer.get_all(user_id=user_id, limit=1)
+            existing = self.memory_layer.get_all(
+                filters={"user_id": user_id},
+                top_k=1,
+            )
             memories = existing["results"]
             return len(memories) > 0
         except Exception:
             return False
 
     def get_patch_specs(self) -> list[PatchSpec]:
-        # # See https://github.com/mem0ai/mem0/blob/v1.0.5/mem0/configs/prompts.py#L62.
-        # kwargs.get(
-        #     "messages", 
-        #     args[0] if len(args) > 0 else ""
-        # )[0]["content"].startswith(
-        #     "You are a Personal Information Organizer"
-        # ) 
-        # # See https://github.com/mem0ai/mem0/blob/v1.0.5/mem0/configs/prompts.py#L123. 
-        # or kwargs.get(
-        #     "messages", 
-        #     args[0] if len(args) > 0 else ""
-        # )[0]["content"].startswith(
-        #     "You are an Assistant Information Organizer"
-        # )
-        # # See https://github.com/mem0ai/mem0/blob/v1.0.5/mem0/memory/main.py#L426. 
-        # or kwargs.get(
-        #     "messages", 
-        #     args[0] if len(args) > 0 else ""
-        # )[0]["content"].startswith(
-        #     self.config.custom_fact_extraction_prompt
-        # ) 
-        # # See https://github.com/mem0ai/mem0/blob/v1.0.5/mem0/memory/kuzu_memory.py#L231. 
-        # or kwargs.get(
-        #     "messages", 
-        #     args[0] if len(args) > 0 else ""
-        # )[0]["content"].startswith(
-        #     "You are a smart assistant who understands entities and their types in a given text"
-        # ) 
-        # # See https://github.com/mem0ai/mem0/blob/v1.0.5/mem0/memory/kuzu_memory.py#L266. 
-        # or (
-        #     "You are an advanced algorithm designed to extract structured information " 
-        #     "from text to construct knowledge graphs"
-        # ) in kwargs.get(
-        #     "messages", 
-        #     args[0] if len(args) > 0 else ""
-        # )[0]["content"]
         getter, setter = make_attr_patch(self.memory_layer.llm, "generate_response")
         spec = PatchSpec(
             name=f"{self.memory_layer.llm.__class__.__name__}.generate_response",
@@ -310,32 +269,15 @@ class Mem0Layer(MemBaseLayer):
             setter=setter,
             wrapper=token_monitor(
                 extract_model_name=lambda *args, **kwargs: (
-                    self.config.llm_model, 
-                    {
-                        # See https://github.com/mem0ai/mem0/blob/v1.0.5/mem0/memory/kuzu_memory.py#L235.
-                        # The graph version of Mem0 uses tools to extract entities and their relations. 
-                        "tools": kwargs.get("tools"),
-                    }
+                    self.config.llm_model,
+                    {},
                 ),
-                # The update-memory prompt is easier to identify than the fact-extraction prompt.
                 extract_input_dict=lambda *args, **kwargs: {
                     "messages": kwargs.get("messages", args[0] if len(args) > 0 else ""),
                     "metadata": {
-                        "op_type": (
-                            "update" if (
-                                    "The new retrieved facts are mentioned in the triple backticks. " 
-                                    "You have to analyze the new retrieved facts and determine whether " 
-                                    "these facts should be added, updated, or deleted in the memory."
-                                ) in kwargs.get(
-                                    "messages", 
-                                    args[0] if len(args) > 0 else [{"content": ""}]
-                                )[0]["content"]
-                            else "generation"
-                        )
+                        "op_type": "generation",
                     },
                 },
-                # The result may be a plain string or an OpenAI-compatible message dictionary
-                # (e.g., {"role": "assistant", "content": "..."}).
                 extract_output_dict=lambda result: {
                     "messages": result if isinstance(result, str) else [
                         {
@@ -349,6 +291,6 @@ class Mem0Layer(MemBaseLayer):
         return [spec]
 
     def cleanup(self) -> None:
-        """Release the Qdrant local client's exclusive file lock."""
-        client = self.memory_layer.vector_store.client
-        client.close()
+        client = getattr(self.memory_layer.vector_store, "client", None)
+        if client is not None and hasattr(client, "close"):
+            client.close()

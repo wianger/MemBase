@@ -10,6 +10,7 @@ qa_batch_size=10
 judge_batch_size=10
 api_config_path="examples/evaluate_mem0_on_locomo/api_config.json"
 prompt_template="examples/evaluate_mem0_on_locomo/qa_prompt.py:get_mem0_qa_prompt"
+message_builder="examples/evaluate_mem0_on_locomo/qa_prompt.py:build_mem0_official_messages"
 # ========================================================
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -25,4 +26,5 @@ python memory_evaluation.py \
     --qa-batch-size "$qa_batch_size" \
     --judge-batch-size "$judge_batch_size" \
     --api-config-path "$api_config_path" \
-    --prompt-template "$prompt_template" > "$log_file" 2>&1
+    --prompt-template "$prompt_template" \
+    --message-builder "$message_builder" > "$log_file" 2>&1

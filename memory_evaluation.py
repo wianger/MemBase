@@ -68,6 +68,16 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--message-builder",
+        type=str,
+        default=None,
+        help=(
+            "Import path for a custom message builder function that directly returns "
+            "OpenAI-style chat messages from `(qa_pair, retrieved_memories)`. "
+            "It accepts 'module.submodule.function' or 'path/to/file.py:function'."
+        ),
+    )
+    parser.add_argument(
         "--add-question-timestamp",
         action="store_true",
         help="Append the question timestamp to the prompt.",
@@ -96,6 +106,10 @@ if __name__ == "__main__":
         import_function_from_path(args.prompt_template)
         if args.prompt_template is not None else None
     )
+    message_builder = (
+        import_function_from_path(args.message_builder)
+        if args.message_builder is not None else None
+    )
 
     runner_config = EvaluationRunnerConfig(
         search_results_path=args.search_results_path,
@@ -107,6 +121,7 @@ if __name__ == "__main__":
         api_config_path=args.api_config_path,
         context_builder=context_builder,
         prompt_template=prompt_template,
+        message_builder=message_builder,
         add_question_timestamp=args.add_question_timestamp,
         metrics=args.metrics,
     )

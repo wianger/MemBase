@@ -1,20 +1,15 @@
 import os
-from .base import MemBaseConfig 
-from pydantic import (
-    Field, 
-    model_validator,
-    JsonValue,
-)
-from copy import deepcopy
-from typing import (
-    Any, 
-    Literal, 
-    Self,
-)
+from typing import Any, Literal, Self
+
+from pydantic import ConfigDict, Field, JsonValue, model_validator
+
+from .base import MemBaseConfig
 
 
 class Mem0Config(MemBaseConfig):
     """The default configuration for Mem0."""
+
+    model_config = ConfigDict(extra="forbid")
 
     llm_provider: Literal[
         "ollama", "openai", "groq", "together", "aws_bedrock", "litellm", 
@@ -107,26 +102,6 @@ class Mem0Config(MemBaseConfig):
         ),
     )
 
-    graph_store_provider: Literal["kuzu"] | None = Field(
-        default=None,
-        description=(
-            "Graph store provider. Currently only `'kuzu'` (local file-based graph) "
-            "is supported. When set to `None` (the default), the graph store is "
-            "disabled and Mem0 operates with a flat memory structure backed only "
-            "by the vector store."
-        ),
-    )
-    graph_store_config: dict[str, JsonValue] = Field(
-        default_factory=dict,
-        description=(
-            "Graph store configuration. For Kuzu, the key `'db'` specifies the "
-            "database directory (auto-set under `save_dir` if omitted)."
-        ),
-        examples=[
-            {"db": "/path/to/kuzu_db"},
-        ],
-    )
-
     reranker_provider: Literal[
         "cohere", "sentence_transformer", "zero_entropy", "llm_reranker", "huggingface",
     ] | None = Field(
@@ -150,37 +125,42 @@ class Mem0Config(MemBaseConfig):
         ],
     )
 
-    custom_fact_extraction_prompt: str | None = Field(
+    custom_instructions: str | None = Field(
         default=None,
         description=(
-            "Custom system prompt for fact extraction. If not provided, Mem0 uses its "
-            "built-in prompt."
-        ),
-    )
-    custom_update_memory_prompt: str | None = Field(
-        default=None,
-        description=(
-            "Custom prompt for memory update decisions. If not provided, Mem0 uses its "
-            "built-in prompt."
+            "Additional extraction instructions forwarded to Mem0 v2's "
+            "`custom_instructions` configuration field."
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_legacy_v1_fields(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+
+        legacy_fields = {
+            "graph_store_provider",
+            "graph_store_config",
+            "custom_fact_extraction_prompt",
+            "custom_update_memory_prompt",
+        }
+        present = sorted(field for field in legacy_fields if field in values)
+        if present:
+            raise ValueError(
+                "Mem0 v2 no longer supports the legacy v1 config field(s): "
+                f"{', '.join(present)}. Use `custom_instructions` and rebuild memory from scratch."
+            )
+        return values
 
     @model_validator(mode="after")
     def _force_persistence(self) -> Self:
-        """Ensure persistence paths are set for Qdrant, history DB, and graph store."""
+        """Ensure persistence paths are set for Qdrant and history DB."""
         if self.collection_name is None:
             self.collection_name = self.user_id
 
         if self.history_db_path is None:
             self.history_db_path = os.path.join(self.save_dir, "history.db")
-
-        if self.graph_store_provider == "kuzu":
-            if "db" not in self.graph_store_config:
-                self.graph_store_config = {
-                    **self.graph_store_config,
-                    "db": os.path.join(self.save_dir, "kuzu_db"),
-                }
         return self
 
     def get_llm_models(self) -> list[str]:
@@ -223,23 +203,13 @@ class Mem0Config(MemBaseConfig):
             "history_db_path": self.history_db_path,
         }
 
-        if self.custom_fact_extraction_prompt is not None:
-            cfg["custom_fact_extraction_prompt"] = self.custom_fact_extraction_prompt
-        if self.custom_update_memory_prompt is not None:
-            cfg["custom_update_memory_prompt"] = self.custom_update_memory_prompt
+        if self.custom_instructions is not None:
+            cfg["custom_instructions"] = self.custom_instructions
 
         if self.reranker_provider is not None:
             cfg["reranker"] = {
                 "provider": self.reranker_provider,
                 "config": self.reranker_config or None,
-            }
-
-        # Mem0 requires LLM config inside `graph_store.config` for entity extraction.
-        if self.graph_store_provider is not None:
-            cfg["graph_store"] = {
-                "provider": self.graph_store_provider,
-                "config": deepcopy(self.graph_store_config),
-                "llm": deepcopy(cfg["llm"]),
             }
 
         return cfg

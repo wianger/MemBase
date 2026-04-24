@@ -13,7 +13,6 @@
         "openai_base_url": "http://localhost:8008/v1",
         "api_key": "EMPTY"
     },
-    "graph_store_provider": "kuzu",
-    "graph_store_config": {},
+    "custom_instructions": "Extract durable memories from the dialogue with correct timestamps and speaker attribution.",
     "save_dir": "mem0_output"
 }

@@ -118,7 +118,7 @@ See the [`examples/`](examples/) directory for step-by-step tutorials:
 | Example | Description |
 |---------|-------------|
 | [Evaluate A-MEM on LongMemEval](examples/evaluate_amem_on_longmemeval/) | Run the full three-stage evaluation pipeline (construction, retrieval, QA) using A-MEM on LongMemEval |
-| [Evaluate Mem0 on LoCoMo](examples/evaluate_mem0_on_locomo/) | Evaluate Mem0 (with Kuzu graph store) on LoCoMo, with a custom question-answering prompt and adversarial question filtering |
+| [Evaluate Mem0 on LoCoMo](examples/evaluate_mem0_on_locomo/) | Evaluate Mem0 v2 on LoCoMo, with a custom question-answering prompt and adversarial question filtering |
 | [Evaluate MemOS on LoCoMo](examples/evaluate_memos_on_locomo/) | Evaluate MemOS with vLLM-served embedding on LoCoMo, with adversarial question filtering |
 | [Evaluate NaiveRAG on LoCoMo](examples/evaluate_naive_rag_on_locomo/) | Evaluate NaiveRAG with local HuggingFace embedding on LoCoMo, with adversarial question filtering and the standard MemBase three-stage pipeline |
 | [Evaluate SimpleMem on LoCoMo](examples/evaluate_simplemem_on_locomo/) | Evaluate the vendored SimpleMem text backend on LoCoMo using the standard MemBase three-stage pipeline |

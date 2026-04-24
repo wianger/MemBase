@@ -7,10 +7,12 @@ from pydantic import (
     Field,
 )
 from ..datasets import DATASET_MAPPING
+from ..inference_utils.backends import get_interface_for_inference
 from ..inference_utils.operators import QuestionAnsweringOperator
 from ..model_types.dataset import QuestionAnswerPair
 from ..model_types.memory import MemoryEntry
 from typing import Any, Callable
+from tqdm import tqdm
 
 
 def answer_questions(
@@ -20,6 +22,7 @@ def answer_questions(
     add_question_timestamp: bool = False,
     prompt_template: Callable[[], Template] | None = None,
     context_builder: Callable[[list[MemoryEntry]], str] | None = None,
+    message_builder: Callable[[QuestionAnswerPair, list[MemoryEntry]], list[dict[str, str]]] | None = None,
     interface_kwargs: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Answer questions using retrieved memories and an LLM.
@@ -39,6 +42,10 @@ def answer_questions(
         context_builder (`Callable[[list[MemoryEntry]], str] | None`, optional):
             A callable that converts a list of memory entries into a single
             context string.
+        message_builder (`Callable[[QuestionAnswerPair, list[MemoryEntry]], list[dict[str, str]]] | None`, optional):
+            A callable that directly builds OpenAI-style chat messages from one
+            question-answer pair and its retrieved memories. When provided, it
+            overrides `prompt_template` and `context_builder`.
         interface_kwargs (`dict[str, Any] | None`, optional):
             Extra keyword arguments forwarded to the LLM operator.
 
@@ -47,6 +54,30 @@ def answer_questions(
             Raw LLM response dictionaries.
     """
     interface_kwargs = interface_kwargs or {}
+
+    if message_builder is not None:
+        interface = get_interface_for_inference(qa_model, **interface_kwargs)
+        messages_list = [
+            message_builder(item["qa_pair"], item["retrieved_memories"])
+            for item in retrievals
+        ]
+        responses = []
+        pbar = tqdm(
+            total=len(messages_list),
+            desc=f"CustomQuestionAnswering(model={qa_model})",
+        )
+        for i in range(0, len(messages_list), qa_batch_size):
+            batch_messages_list = messages_list[i:i + qa_batch_size]
+            batch_responses = interface(
+                batch_messages_list,
+                temperature=0.0,
+            )
+            if isinstance(batch_responses, dict):
+                batch_responses = [batch_responses]
+            responses.extend(batch_responses)
+            pbar.update(len(batch_responses))
+        pbar.close()
+        return responses
 
     if context_builder is None:
         context_builder = lambda memories: "\n\n".join(
@@ -149,6 +180,13 @@ class EvaluationRunnerConfig(BaseModel):
             "``$question`` and ``$context`` placeholders."
         ),
     )
+    message_builder: Callable[[QuestionAnswerPair, list[MemoryEntry]], list[dict[str, str]]] | None = Field(
+        default=None,
+        description=(
+            "A callable that directly builds OpenAI-style chat messages from "
+            "a question-answer pair and its retrieved memories."
+        ),
+    )
     add_question_timestamp: bool = Field(
         default=False,
         description="Append the question timestamp to the prompt.",
@@ -233,6 +271,7 @@ class EvaluationRunner:
             add_question_timestamp=cfg.add_question_timestamp,
             prompt_template=cfg.prompt_template,
             context_builder=cfg.context_builder,
+            message_builder=cfg.message_builder,
             interface_kwargs=interface_kwargs,
         )
 

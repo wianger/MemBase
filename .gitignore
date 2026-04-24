@@ -251,4 +251,4 @@ $RECYCLE.BIN/
 
 .codex
 pretrained_models/
-output/
+*output/

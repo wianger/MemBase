@@ -1,15 +1,16 @@
 # Evaluate Mem0 on LoCoMo
 
-This example walks through evaluating the **Mem0** memory layer on the **LoCoMo** dataset. It covers how to configure Mem0 with `deepseek-chat` for construction and evaluation, how to deploy `Qwen3-Embedding-8B` locally with vLLM, how to use a custom question-answering prompt from the [Mem0 paper](https://arxiv.org/pdf/2504.19413), and how to filter specific question types at the retrieval stage.
+This example walks through evaluating the **Mem0** memory layer on the **LoCoMo** dataset using the native **Mem0 v2** API shape. It covers how to configure Mem0 with `deepseek-chat` for construction and evaluation, how to deploy `Qwen3-Embedding-8B` locally with vLLM, how to use a custom question-answering prompt derived from the [Mem0 paper](https://arxiv.org/pdf/2504.19413), and how to filter specific question types at the retrieval stage.
 
 ---
 
 ## Prerequisites
 
-- **Python >= 3.12** with the Mem0 environment (`pip install -r envs/mem0_requirements.txt`).
+- **Python >= 3.12** with the Mem0 environment (`pip install -r envs/mem0_requirements.txt`). The requirements file installs Mem0 from the upstream GitHub `v2.0.0` tag rather than a PyPI prerelease.
 - **vLLM** installed in the environment (`pip install vllm`).
 - **Qwen3-Embedding-8B** downloaded locally. See the [example](../download_models/) for how to download it.
 - A **DeepSeek API key** for construction and evaluation.
+- If you want Mem0 v2's hybrid retrieval path locally, install the extras listed in [`envs/mem0_requirements.txt`](../../envs/mem0_requirements.txt). `fastembed` is required for BM25 sparse encoding, and Mem0 v2 may expect a local spaCy English model such as `en_core_web_sm` depending on your environment.
 
 ---
 
@@ -69,13 +70,17 @@ In this example, `llm_provider` is set to `"openai"`, and the API key and base U
 }
 ```
 
-### Graph Store
+### Custom Instructions
 
-This example enables the **Kuzu** graph store, a local file-based graph database that requires no external server. The database directory is automatically created under the user directory. To disable the graph store, simply remove the `graph_store_provider` field from the config (Mem0 will then operate with a flat memory structure backed only by the vector store).
+Mem0 v2 replaces the old v1 fact-extraction / graph-store prompt wiring with a unified `custom_instructions` field. Use it to bias extraction behavior without depending on removed v1 prompt fields:
+
+```json
+"custom_instructions": "Extract durable memories from the dialogue with correct timestamps and speaker attribution."
+```
 
 ### Vector Store
 
-Mem0 uses **Qdrant in local mode** (`on_disk=True`) by default, which stores data directly on disk without requiring an external Qdrant server. Each user's memory is stored in its own directory, so multiple processes can safely run in parallel as long as they handle non-overlapping trajectory ranges.
+Mem0 uses **Qdrant in local mode** (`on_disk=True`) by default, which stores data directly on disk without requiring an external Qdrant server. Mem0 v2 also maintains an internal entity collection to support hybrid retrieval. Each user's memory is stored in its own directory, so multiple processes can safely run in parallel as long as they handle non-overlapping trajectory ranges.
 
 ## Step 4: Run Memory Construction (Stage 1)
 
@@ -107,8 +112,16 @@ Edit [`run_evaluation.sh`](run_evaluation.sh) and run:
 bash examples/evaluate_mem0_on_locomo/run_evaluation.sh
 ```
 
-This example uses a custom question-anwering prompt from the Mem0 paper via `--prompt-template`, which is defined in [`qa_prompt.py`](qa_prompt.py). The prompt instructs the model to resolve relative time references and leverage knowledge graph relations.
+This example uses the upstream Mem0 LoCoMo **non-graph** answer prompt via `--prompt-template`, together with a custom `--message-builder` that sends the rendered prompt as a single `system` message, matching the official evaluation style more closely. The helper is defined in [`qa_prompt.py`](qa_prompt.py).
+
+In upstream Mem0 evaluation code there are three related answer prompt variants:
+
+- `ANSWER_PROMPT_GRAPH`: the older graph-aware variant that expects per-speaker graph relations in addition to memories
+- `ANSWER_PROMPT`: the non-graph two-speaker variant, which is the one this MemBase example now follows
+- `ANSWER_PROMPT_ZEP`: a separate single-stream prompt used by the Zep baseline
+
+Because the MemBase Mem0 v2 migration intentionally removed graph-memory support, this example aligns with the official **non-graph** prompt rather than the graph variant.
 
 > **Note**: Make sure to set `--dataset-type LoCoMo` so that the correct judge prompt template and response parser are used.
 >
-> **Fairness Note**: This example keeps Mem0's paper-style QA prompt by default. If you want a stricter apples-to-apples comparison with the other methods, remove the `--prompt-template` flag from [`run_evaluation.sh`](run_evaluation.sh).
+> **Fairness Note**: This example keeps Mem0's official-style LoCoMo QA formatting by default. If you want a stricter apples-to-apples comparison with the other methods, remove both `--prompt-template` and `--message-builder` from [`run_evaluation.sh`](run_evaluation.sh).

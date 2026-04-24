@@ -6,4 +6,5 @@ dateparser
 tantivy
 numpy
 litellm
+nltk
 

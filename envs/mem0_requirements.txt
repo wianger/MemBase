@@ -1,4 +1,7 @@
-mem0ai==1.0.5
-kuzu==0.11.3
+git+https://github.com/mem0ai/mem0.git@v2.0.0
+fastembed>=0.7.1
+spacy>=3.7.0
+qdrant-client>=1.15.0
 rank-bm25==0.2.2
 litellm==1.75.9
+nltk
