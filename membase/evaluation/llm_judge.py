@@ -1,5 +1,11 @@
-from .base import BaseMetric 
-from ..model_types.evaluation import MetricResult
+import inspect
+from smartcomment import (
+    comment_variable, 
+    comment_op,
+    comment_op_scope,
+    comment_link, 
+)
+from .base import BaseMetric, MetricResult
 from typing import ClassVar, Any
 
 
@@ -89,6 +95,24 @@ class LLMJudge(BaseMetric):
         for template_name, indices in groups.items():
             judge_operator.set_prompt(template_name)
 
+            runtime_judge_template = comment_variable(
+                judge_operator.prompt.template,
+                to_runtime=True,
+                id_strategy=lambda _: template_name,
+                comment=(
+                    "The prompt template for the judge model. "
+                    "It is a `string.Template` object with `$question`, `$prediction`, "
+                    "and `$golden_answers` placeholders. "
+                    "It tells the judge model to judge whether the model's prediction " 
+                    "is correct or not based on a list of golden answers."
+                ),
+                category="prompt",
+                class_name="judge_prompt",
+                metadata={
+                    "op_type": "llm-judge",
+                }
+            )
+
             batch_questions = [qa_pairs[i].question for i in indices]
             batch_golden_answers = [qa_pairs[i].golden_answers for i in indices]
             batch_predictions = [predictions[i] for i in indices]
@@ -113,5 +137,79 @@ class LLMJudge(BaseMetric):
                     "value": parse_judge_response(content),
                     "metadata": {"judge_response": content},
                 }
+
+                with comment_op_scope(
+                    op_name="llm-judge",
+                    category="evaluation",
+                    comment=(
+                        "The judge model judges whether the model's prediction "
+                        "is correct or not based on a list of golden answers."
+                    ),
+                ):
+                    question = (
+                        batch_questions[local_pos], 
+                        {
+                            "class_name": "query", 
+                            "id_strategy": lambda v: qa_pairs[global_idx].id,
+                        }
+                    )
+                    prediction = (
+                        batch_predictions[local_pos], 
+                        {
+                            "class_name": "prediction",
+                            "category": "llm_response",
+                        }
+                    )
+                    golden_answers = (
+                        batch_golden_answers[local_pos], 
+                        {
+                            "class_name": "golden_answers", 
+                            "encoding_fn": lambda v: ", ".join(v),
+                            "category": "golden_answers",
+                            "comment": "The golden answers for the question.",
+                        }
+                    )
+                    judge_response = (
+                        content, 
+                        {
+                            "class_name": "judge_response",
+                            "category": "llm_response",
+                            "comment": "The judge model's judgment.",
+                        }
+                    )
+
+                    comment_op(
+                        inputs=[
+                            question, 
+                            golden_answers, 
+                            runtime_judge_template,
+                            prediction,
+                        ],
+                        outputs=[judge_response],
+                        comment=(
+                            "The judge model gives its judgment " 
+                            "based on the question, the golden answers, " 
+                            "and the instruction."
+                        ),
+                        reuse_op=True,
+                    )
+                    comment_link(
+                        source=judge_response,
+                        target=(
+                            results[global_idx]["value"],
+                            {
+                                "class_name": "judge_score", 
+                                "comment": "The judgement score.",
+                            },
+                        ),
+                        comment=(
+                            "Use a function to convert the judge model's response "
+                            "to a float score."
+                        ),
+                        edge_metadata={
+                            "source_code": inspect.getsource(parse_judge_response),
+                        },
+                    )
+                    
 
         return results

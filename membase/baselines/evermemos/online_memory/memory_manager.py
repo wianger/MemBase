@@ -2,7 +2,17 @@ import asyncio
 import pickle
 import uuid
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+import json
+from smartcomment import (
+    current_context, 
+    is_tracing_enabled, 
+    comment_variable,
+    comment_op,
+    comment_mutation, 
+    comment_op_scope, 
+) 
 
 from api_specs.memory_types import MemCell, RawDataType
 from memory_layer.memcell_extractor.base_memcell_extractor import RawData
@@ -238,8 +248,48 @@ class OnlineMemoryManager:
     
     async def _process_message(self, msg_dict: Dict[str, Any]) -> Optional[MemCell]:
         """Process a single message: detect boundary and extract MemCell if needed."""
-        # Add to buffer
-        self._message_buffer.append(msg_dict)
+        # Get the raw message and make a link between it and the message buffer. 
+        runtime_raw_message = None 
+        tracing_ctx = current_context() 
+        if tracing_ctx is not None and is_tracing_enabled():
+            runtime_raw_message = tracing_ctx.get_variable(name="raw_input")
+
+        # The operation made on the message buffer should be an in-place mutation.
+        # Note that the memory system maintains only a single message buffer,
+        # so our identity strategy directly names this variable "message-buffer".
+        with comment_mutation(
+            target=self._message_buffer, 
+            inputs=[runtime_raw_message],  
+            category="message_buffer",
+            encoding_fn=partial(
+                json.dumps,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            comment=(
+                "A message buffer that stores messages " 
+                "not yet processed by the memory system. " 
+                "Its data structure is a list."
+            ), 
+            id_strategy=lambda _: "message-buffer",
+            mutation_name="memory_system.message_buffer_update",
+            mutation_category="update", 
+            mutation_comment=(
+                "Add a new input message into the current message buffer."
+            ), 
+        ) as mutation_scope:
+            # Add to buffer
+            self._message_buffer.append(msg_dict)
+        
+        # We can access the new version of the message buffer after the mutation scope exits.
+        # We register it in the tracing context so we can reuse it in the boundary detection stage.
+        if tracing_ctx is not None and is_tracing_enabled():
+            tracing_ctx.register_variable(
+                "message_buffer", 
+                mutation_scope.result,
+                overwrite=True,
+            )
         
         # Need at least 2 messages for boundary detection
         if len(self._message_buffer) < 2:
@@ -284,10 +334,67 @@ class OnlineMemoryManager:
         
         # Boundary detected!
         self._stats["boundaries_detected"] += 1
+
+
+        # We can get the runtime variable of the temporary memory cell.
+        runtime_temporary_memcell, runtime_memcell_result_snapshot = None, None 
+        if tracing_ctx is not None and is_tracing_enabled():
+            runtime_temporary_memcell = tracing_ctx.get_variable("memcell")
         
-        # Generate event_id if not present
         if memcell_result.event_id is None:
             memcell_result.event_id = generate_object_id_str()
+
+            # The event identifier represents the unique identifier of the memory cell.
+            memcell_result_snapshot = {
+                "original_data": memcell_result.original_data,
+                "timestamp": memcell_result.timestamp.isoformat(),
+                "event_id": memcell_result.event_id,
+                "episode": None,
+                "subject": None,
+                "summary": None,
+                "foresights": None,
+                "event_log": None,
+            }
+
+            # Thanks to runtime variables being able to store decoding functions,
+            # we can easily obtain the original snapshot rather than its string representation.
+            if runtime_temporary_memcell is not None and "summary" in runtime_temporary_memcell.value:
+                memcell_result_snapshot["summary"] = memcell_result.summary 
+            
+            runtime_memcell_result_snapshot = comment_variable(
+                memcell_result_snapshot,
+                variable_name="memcell_result",
+                to_runtime=True,
+                category="memory_entry",
+                encoding_fn=partial(
+                    json.dumps,
+                    ensure_ascii=False,
+                    indent=4,
+                    sort_keys=True,
+                ),
+                decoding_fn=json.loads,
+                id_strategy="evermemos-dict",
+                comment=(
+                    "An initial memory-unit created from the temporary memory unit "
+                    "candidate after the memory system assigns it a unique event identifier."
+                ),
+            )
+            
+            comment_op(
+                inputs=[runtime_temporary_memcell],
+                outputs=[runtime_memcell_result_snapshot],
+                op_name="memory_system.finalize_memory_unit",
+                category="initialization",
+                comment=(
+                    "The memory system finalizes the temporary memory unit candidate into "
+                    "a concrete memory unit by assigning a unique event identifier. "
+                    "It is an initial memory unit that will be used in the "
+                    "subsequent extraction and indexing stages."
+                ),
+            )
+
+        if tracing_ctx is not None and is_tracing_enabled():
+            tracing_ctx.remove_variable("memcell")
         
         # Extract Episode
         episode_request = MemoryExtractRequest(
@@ -296,74 +403,306 @@ class OnlineMemoryManager:
             participants=list(speakers),
             group_id=self.config.group_id,
         )
-        
-        episode_memory = await self._episode_extractor.extract_memory(episode_request)
-        
-        if episode_memory and episode_memory.episode:
-            memcell_result.episode = episode_memory.episode
-            memcell_result.subject = episode_memory.subject if episode_memory.subject else ""
-            memcell_result.summary = episode_memory.episode[:200] + "..."
-        
-            # 2. Extract Foresight
-            if self._foresight_extractor:
-                # Note: The following code snippet is not included in the official implementation.
-                input_text = ""
-                for data in memcell_result.original_data:
-                    speaker = data.get('speaker_name') or data.get('sender', 'Unknown')
-                    content = data['content']
-                    msg_ts = data.get('timestamp')
-                    ts_str = from_iso_format(msg_ts)
-                    input_text += f"[{ts_str}] {speaker}: {content}\n"
 
-                foresight_memories = (
-                    await self._foresight_extractor.generate_foresights_for_conversation(
-                        input_text, 
-                        episode_memory.timestamp,
-                        episode_memory.user_id, 
+
+        # Initialize the extraction operation context.
+        foresight_enabled = self._foresight_extractor is not None
+        event_log_enabled = self._event_log_extractor is not None
+        extraction_comment = (
+            "Run the memory-extraction stage on the initial memory-unit. "
+            "This stage first extracts an episode-level narrative memory."
+        )
+        if foresight_enabled:
+            extraction_comment += (
+                " The foresight extraction is enabled, so the stage also derives "
+                "foresight memories from the extracted episode memory."
+            )
+        if event_log_enabled:
+            extraction_comment += (
+                " The event-log extraction is enabled, so the stage also derives a "
+                "retrieval-oriented event log from the same initial memory-unit."
+            )
+        with comment_op_scope(
+            op_name="memory_system.extract_memory",
+            category="extraction",
+            comment=extraction_comment,
+            metadata={
+                "llm_model": self._llm_provider.provider.model,
+                "foresight_enabled": foresight_enabled,
+                "event_log_enabled": event_log_enabled,
+            },
+        ):
+            episode_memory = await self._episode_extractor.extract_memory(episode_request)
+        
+            if episode_memory and episode_memory.episode:
+                # Get the current snapshot of the initial memory-unit.
+                runtime_episode_memory = None 
+                memcell_result_snapshot = {} 
+                if tracing_ctx is not None and is_tracing_enabled():
+                    runtime_episode_memory = tracing_ctx.get_variable("episode_memory")
+                    memcell_result_snapshot = runtime_memcell_result_snapshot.value
+                    
+                with comment_mutation(
+                    target=memcell_result_snapshot,
+                    inputs=[runtime_episode_memory],
+                    comment=(
+                        "This is a refined memory-unit after "
+                        "the memory system enriches it with the extracted episode-level "
+                        "narrative memory." 
+                    ),
+                    encoding_fn=partial(
+                        json.dumps,
+                        ensure_ascii=False,
+                        indent=4,
+                        sort_keys=True,
+                    ),
+                    category="memory_entry",
+                    decoding_fn=json.loads,
+                    id_strategy="evermemos-dict",
+                    mutation_comment=(
+                        "The memory system refines the initial memory-unit by writing "
+                        "the extracted episode-level narrative memory back into it as "
+                        "the episode text, the main subject, and a short derived summary."
+                    ), 
+                    reuse_op=True,
+                ) as memcell_mutation_scope:
+                    memcell_result.episode = episode_memory.episode
+                    memcell_result.subject = episode_memory.subject if episode_memory.subject else ""
+                    memcell_result.summary = episode_memory.episode[:200] + "..."
+
+                    memcell_result_snapshot["episode"] = memcell_result.episode
+                    memcell_result_snapshot["subject"] = memcell_result.subject 
+                    memcell_result_snapshot["summary"] = memcell_result.summary
+
+                runtime_memcell_result_snapshot = memcell_mutation_scope.result
+                # Overwrite the runtime variable of the memory-unit.
+                # A new version of memory-unit is registered in the tracing context.
+                if tracing_ctx is not None and is_tracing_enabled():
+                    tracing_ctx.register_variable(
+                        "memcell_result", 
+                        runtime_memcell_result_snapshot,
+                        overwrite=True,
                     )
+
+                if runtime_episode_memory is not None:
+                    tracing_ctx.remove_variable("episode_memory")
+
+                # 2. Extract Foresight
+                if self._foresight_extractor:
+                    # Note: The following code snippet is not included in the official implementation.
+                    input_text = ""
+                    for data in memcell_result.original_data:
+                        speaker = data.get('speaker_name') or data.get('sender', 'Unknown')
+                        content = data['content']
+                        msg_ts = data.get('timestamp')
+                        ts_str = from_iso_format(msg_ts)
+                        input_text += f"[{ts_str}] {speaker}: {content}\n"
+
+                    foresight_memories = (
+                        await self._foresight_extractor.generate_foresights_for_conversation(
+                            input_text, 
+                            episode_memory.timestamp,
+                            episode_memory.user_id, 
+                        )
+                    )
+                    if foresight_memories:
+                        memcell_result.foresights = foresight_memories
+
+                        # Simulate an in-place mutation of the memory-unit.
+                        memcell_result_snapshot = {} 
+                        runtime_foresights = None 
+                        if tracing_ctx is not None and is_tracing_enabled():
+                            runtime_foresights = tracing_ctx.get_variable("foresights")
+                            memcell_result_snapshot = runtime_memcell_result_snapshot.value
+
+                        with comment_mutation(
+                            target=memcell_result_snapshot,
+                            inputs=[runtime_foresights],
+                            comment=(
+                                "This is a further refined memory-unit after the memory "
+                                "system enriches it with the structured foresight memories "
+                                "derived from the memory unit's original data."
+                            ),
+                            encoding_fn=partial(
+                                json.dumps,
+                                ensure_ascii=False,
+                                indent=4,
+                                sort_keys=True,
+                            ),
+                            category="memory_entry",
+                            decoding_fn=json.loads,
+                            id_strategy="evermemos-dict",
+                            mutation_comment=(
+                                "The memory system further refines the current memory-unit "
+                                "by writing the structured foresight memories derived from "
+                                "the memory unit's original data back into the memory-unit."
+                            ), 
+                            reuse_op=True,
+                        ) as memcell_mutation_scope: 
+                            memcell_result_snapshot["foresights"] = runtime_foresights.value
+
+                        runtime_memcell_result_snapshot = memcell_mutation_scope.result
+                        if tracing_ctx is not None and is_tracing_enabled():
+                            tracing_ctx.register_variable(
+                                "memcell_result", 
+                                runtime_memcell_result_snapshot,
+                                overwrite=True,
+                            )
+
+                        if runtime_foresights is not None:
+                            tracing_ctx.remove_variable("foresights")
+
+            else:
+                # Episode extraction failed - raise exception, don't hide errors
+                raise ValueError(
+                    f"❌ Episode extraction failed! conv_id={self.config.group_id}, memcell_id={memcell_result.event_id}"
                 )
-                if foresight_memories:
-                    memcell_result.foresights = foresight_memories
-        else:
-            # Episode extraction failed - raise exception, don't hide errors
-            raise ValueError(
-                f"❌ Episode extraction failed! conv_id={self.config.group_id}, memcell_id={memcell_result.event_id}"
-            )
+            
+            # Extract Event Log (if enabled)
+            if self._event_log_extractor and episode_memory and episode_memory.episode:
+                event_log = await self._event_log_extractor.extract_event_log(
+                    memcell=memcell_result,
+                    timestamp=memcell_result.timestamp,
+                )
+                if event_log:
+                    memcell_result.event_log = event_log
+
+                    # Simulate an in-place mutation of the memory-unit.
+                    memcell_result_snapshot = {} 
+                    runtime_event_log = None 
+                    if tracing_ctx is not None and is_tracing_enabled():
+                        runtime_event_log = tracing_ctx.get_variable("event_log")
+                        memcell_result_snapshot = runtime_memcell_result_snapshot.value
+
+                    with comment_mutation(
+                        target=memcell_result_snapshot,
+                        inputs=[runtime_event_log],
+                        comment=(
+                            "This is a further refined memory-unit after the memory "
+                            "system enriches it with the structured retrieval-oriented "
+                            "event-log extracted from the memory unit's original data."
+                        ),
+                        encoding_fn=partial(
+                            json.dumps,
+                            ensure_ascii=False,
+                            indent=4,
+                            sort_keys=True,
+                        ),
+                        category="memory_entry",
+                        decoding_fn=json.loads,
+                        id_strategy="evermemos-dict",
+                        mutation_comment=(
+                            "The memory system further refines the current memory-unit "
+                            "by writing the structured retrieval-oriented event-log "
+                            "back into the memory-unit."
+                        ), 
+                        reuse_op=True,
+                    ) as memcell_mutation_scope: 
+                        if runtime_event_log is not None:
+                            memcell_result_snapshot["event_log"] = runtime_event_log.value
+
+                    runtime_memcell_result_snapshot = memcell_mutation_scope.result
+                    if tracing_ctx is not None and is_tracing_enabled():
+                        tracing_ctx.register_variable(
+                            "memcell_result", 
+                            runtime_memcell_result_snapshot,
+                            overwrite=True,
+                        )
+
+                    if runtime_event_log is not None:
+                        tracing_ctx.remove_variable("event_log")
         
-        # Extract Event Log (if enabled)
-        if self._event_log_extractor and episode_memory and episode_memory.episode:
-            event_log = await self._event_log_extractor.extract_event_log(
-                memcell=memcell_result,
-                timestamp=memcell_result.timestamp,
-            )
-            if event_log:
-                memcell_result.event_log = event_log
+            # Clustering (if enabled)
+            # For this version, we don't need to trace the clustering operation 
+            # as it doesn't affect the memory system's performance.
+            if self._cluster_manager and self._cluster_state:
+                # Incremental clustering: Update the current cluster state  
+                _, self._cluster_state = await self._cluster_manager.cluster_memcell(
+                    memcell_result.to_dict(),
+                    self._cluster_state,
+                )
+            
+            # Add to index
+            await self._index_manager.add_memcell(memcell_result)
+
+            if tracing_ctx is not None and is_tracing_enabled():
+                memcell_result_snapshot = runtime_memcell_result_snapshot.value
+                with comment_mutation(
+                    target=memcell_result_snapshot,
+                    comment=(
+                        "This is the final memory-unit prepared for downstream memory "
+                        "use and storage."
+                    ),
+                    encoding_fn=partial(
+                        json.dumps,
+                        ensure_ascii=False,
+                        indent=4,
+                        sort_keys=True,
+                    ),
+                    category="memory_entry",
+                    decoding_fn=json.loads,
+                    id_strategy="evermemos-dict",
+                    mutation_comment=(
+                        "After memory extraction is complete, the memory system "
+                        "conceptually removes the raw original data from the current "
+                        "memory-unit, forms the final memory unit for downstream use, "
+                        "and places that final memory unit into the memory store."
+                    ),
+                    reuse_op=True,
+                ):
+                    memcell_result_snapshot.pop("original_data")
         
-        
-        # Clustering (if enabled)
-        if self._cluster_manager and self._cluster_state:
-            # Incremental clustering: Update the current cluster state  
-            _, self._cluster_state = await self._cluster_manager.cluster_memcell(
-                memcell_result.to_dict(),
-                self._cluster_state,
-            )
-        
-        # Add to index
-        await self._index_manager.add_memcell(memcell_result)
-        
-        # Store MemCell
-        self._memcells.append(memcell_result)
-        self._stats["memcells_extracted"] += 1
+            # Store MemCell
+            self._memcells.append(memcell_result)
+            self._stats["memcells_extracted"] += 1
         
         # Update profiles for user roles
+        # For this version , we don't need to trace the profile update operation 
+        # as it doesn't affect the memory system's performance.
         await self._update_profiles_for_users(memcell_result)
         
-        # Reset buffer with smart mask
-        # See https://github.com/EverMind-AI/EverMemOS/blob/v1.1.0/evaluation/src/adapters/evermemos/stage1_memcells_extraction.py#L219
-        if smart_mask_flag:
-            self._message_buffer = [self._message_buffer[-2], self._message_buffer[-1]]
-        else:
-            self._message_buffer = [self._message_buffer[-1]]
+
+        mutation_comment = (
+            "After the current memory unit is extracted, the memory system resets "
+            "the message buffer by keeping the last two messages because smart mask "
+            "is enabled."
+            if smart_mask_flag
+            else
+            "After the current memory unit is extracted, the memory system resets "
+            "the message buffer by keeping only the newest message."
+        )
+        # The original implementation updates the message buffer by reassigning
+        # `self._message_buffer` instead of mutating that list strictly in place.
+        # Therefore, this mutation is traced on the parent container `self`,
+        # while the encoder projects only the embedded message-buffer field.
+        with comment_mutation(
+            target=self,
+            id_strategy=lambda _: "message-buffer",
+            encoding_fn=lambda memory_manager: json.dumps(
+                memory_manager._message_buffer,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            decoding_fn=json.loads,
+            mutation_name="memory_system.message_buffer_update",
+            mutation_category="update",
+            mutation_comment=mutation_comment,
+            mutation_metadata={
+                "smart_mask_flag": smart_mask_flag,
+            },
+        ):
+            # Reset buffer with smart mask
+            # See https://github.com/EverMind-AI/EverMemOS/blob/v1.1.0/evaluation/src/adapters/evermemos/stage1_memcells_extraction.py#L219
+            if smart_mask_flag:
+                self._message_buffer = [self._message_buffer[-2], self._message_buffer[-1]]
+            else:
+                self._message_buffer = [self._message_buffer[-1]]
+            
+        # Remove the tracing variables. 
+        if tracing_ctx is not None and is_tracing_enabled():
+            tracing_ctx.remove_variable("message_buffer")
+            tracing_ctx.remove_variable("memcell_result")
         
         return memcell_result
     
@@ -454,6 +793,27 @@ class OnlineMemoryManager:
         if len(self._message_buffer) < 1:
             return None
         
+        # Note: This message buffer may not have been incorporated into the execution graph.
+        # For example, if the conversation is very short, EverMemOS may terminate before
+        # it starts segmenting the dialogue, leaving the buffer unprocessed.
+        runtime_message_buffer = comment_variable(
+            self._message_buffer,
+            to_runtime=True,
+            encoding_fn=partial(
+                json.dumps,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            id_strategy=lambda _: "message-buffer",
+            category="message_buffer",
+            comment=(
+                "A message buffer that stores messages " 
+                "not yet processed by the memory system. " 
+                "Its data structure is a list."
+            ), 
+        )
+        
         # Get speakers
         speakers = set()
         for m in self._message_buffer:
@@ -476,6 +836,48 @@ class OnlineMemoryManager:
             event_id=generate_object_id_str(),
             type=RawDataType.CONVERSATION,
         )
+
+        runtime_memcell = comment_variable(
+            {
+                "original_data": memcell.original_data,
+                "timestamp": memcell.timestamp.isoformat(),
+                "summary": memcell.summary,
+                "event_id": memcell.event_id,
+                "episode": None,
+                "subject": None,
+                "foresights": None,
+                "event_log": None,
+            },
+            variable_name="memcell_result",
+            to_runtime=True,
+            category="memory_entry",
+            encoding_fn=partial(
+                json.dumps,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            decoding_fn=json.loads,
+            id_strategy="evermemos-dict",
+            comment=(
+                "An initial memory-unit created from the current message buffer directly. "
+                "It contains a timestamp (`timestamp`) and the raw data (`original_data`) derived "
+                "from the current message buffer. "
+                "The timestamp corresponds to the last message's timestamp in the original data."
+            ),
+        )
+        comment_op(
+            inputs=[runtime_message_buffer],
+            outputs=[runtime_memcell],
+            op_name="memory_system.finalize_memory_unit",
+            category="initialization",
+            comment=(
+                "The memory system finalizes the remaining buffered messages into "
+                "a concrete memory unit because the conversation is ending. "
+                "It is an initial memory unit that will be used in the "
+                "subsequent extraction and indexing stages."
+            ),
+        )
         
         # Extract Episode
         episode_request = MemoryExtractRequest(
@@ -484,68 +886,295 @@ class OnlineMemoryManager:
             participants=list(speakers),
             group_id=self.config.group_id,
         )
-        
-        episode_memory = await self._episode_extractor.extract_memory(episode_request)
-        
-        if episode_memory and episode_memory.episode:
-            memcell.episode = episode_memory.episode
-            memcell.subject = episode_memory.subject if episode_memory.subject else ""
-            memcell.summary = episode_memory.episode[:200] + "..."
 
-            # 2. Extract Foresight (optional)
-            if self._foresight_extractor:
-                input_text = ""
-                for data in memcell.original_data:
-                    speaker = data.get('speaker_name') or data.get('sender', 'Unknown')
-                    content = data['content']
-                    msg_ts = data.get('timestamp')
-                    ts_str = from_iso_format(msg_ts)
-                    input_text += f"[{ts_str}] {speaker}: {content}\n"
+        # Get the tracing context.
+        tracing_ctx = current_context()
+        
+        # Initialize the extraction operation context.
+        foresight_enabled = self._foresight_extractor is not None
+        event_log_enabled = self._event_log_extractor is not None
+        extraction_comment = (
+            "Run the memory-extraction stage on the initial memory-unit. "
+            "This stage first extracts an episode-level narrative memory."
+        )
+        if foresight_enabled:
+            extraction_comment += (
+                " The foresight extraction is enabled, so the stage also derives "
+                "foresight memories from the extracted episode memory."
+            )
+        if event_log_enabled:
+            extraction_comment += (
+                " The event-log extraction is enabled, so the stage also derives a "
+                "retrieval-oriented event log from the same initial memory-unit."
+            )
+        with comment_op_scope(
+            op_name="memory_system.extract_memory",
+            category="extraction",
+            comment=extraction_comment,
+            metadata={
+                "llm_model": self._llm_provider.provider.model,
+                "foresight_enabled": foresight_enabled,
+                "event_log_enabled": event_log_enabled,
+            },
+        ):
+            episode_memory = await self._episode_extractor.extract_memory(episode_request)
 
-                foresight_memories = (
-                    await self._foresight_extractor.generate_foresights_for_conversation(
-                        input_text, 
-                        episode_memory.timestamp,
-                        episode_memory.user_id, 
+            if episode_memory and episode_memory.episode:
+                # Get the current snapshot of the initial memory-unit.
+                runtime_episode_memory = None 
+                memcell_snapshot = {} 
+                if tracing_ctx is not None and is_tracing_enabled():
+                    runtime_episode_memory = tracing_ctx.get_variable("episode_memory")
+                    memcell_snapshot = runtime_memcell.value
+            
+                with comment_mutation(
+                    target=memcell_snapshot,
+                    inputs=[runtime_episode_memory],
+                    comment=(
+                        "This is a refined memory-unit after "
+                        "the memory system enriches it with the extracted episode-level "
+                        "narrative memory." 
+                    ),
+                    encoding_fn=partial(
+                        json.dumps,
+                        ensure_ascii=False,
+                        indent=4,
+                        sort_keys=True,
+                    ),
+                    category="memory_entry",
+                    decoding_fn=json.loads,
+                    id_strategy="evermemos-dict",
+                    mutation_comment=(
+                        "The memory system refines the initial memory-unit by writing "
+                        "the extracted episode-level narrative memory back into it as "
+                        "the episode text, the main subject, and a short derived summary."
+                    ), 
+                    reuse_op=True,
+                ) as memcell_mutation_scope:
+                    memcell.episode = episode_memory.episode
+                    memcell.subject = episode_memory.subject if episode_memory.subject else ""
+                    memcell.summary = episode_memory.episode[:200] + "..."
+
+                    memcell_snapshot["episode"] = memcell.episode
+                    memcell_snapshot["subject"] = memcell.subject 
+                    memcell_snapshot["summary"] = memcell.summary
+
+                runtime_memcell_snapshot = memcell_mutation_scope.result
+                # Overwrite the runtime variable of the memory-unit.
+                # A new version of memory-unit is registered in the tracing context.
+                if tracing_ctx is not None and is_tracing_enabled():
+                    tracing_ctx.register_variable(
+                        "memcell_result", 
+                        runtime_memcell_snapshot,
+                        overwrite=True,
                     )
-                )
-                if foresight_memories:
-                    memcell.foresights = foresight_memories
-        else:
-            # Episode extraction failed - raise exception, don't hide errors
-            raise ValueError(
-                f"❌ Episode extraction failed! conv_id={self.config.group_id}, memcell_id={memcell.event_id}"
-            )
 
-        # Extract Event Log (if enabled)
-        if self._event_log_extractor and episode_memory and episode_memory.episode:
-            event_log = await self._event_log_extractor.extract_event_log(
-                memcell=memcell,
-                timestamp=memcell.timestamp,
-            )
-            if event_log:
-                memcell.event_log = event_log
-        
-        # Clustering (if enabled)
-        if self._cluster_manager and self._cluster_state:
-            # Incremental clustering: Update the current cluster state  
-            _, self._cluster_state = await self._cluster_manager.cluster_memcell(
-                memcell.to_dict(),
-                self._cluster_state,
-            )
-        
-        # Add to index
-        await self._index_manager.add_memcell(memcell)
-        
-        # Store MemCell
-        self._memcells.append(memcell)
-        self._stats["memcells_extracted"] += 1
+                if runtime_episode_memory is not None:
+                    tracing_ctx.remove_variable("episode_memory")
+
+                # 2. Extract Foresight (optional)
+                if self._foresight_extractor:
+                    input_text = ""
+                    for data in memcell.original_data:
+                        speaker = data.get('speaker_name') or data.get('sender', 'Unknown')
+                        content = data['content']
+                        msg_ts = data.get('timestamp')
+                        ts_str = from_iso_format(msg_ts)
+                        input_text += f"[{ts_str}] {speaker}: {content}\n"
+
+                    foresight_memories = (
+                        await self._foresight_extractor.generate_foresights_for_conversation(
+                            input_text, 
+                            episode_memory.timestamp,
+                            episode_memory.user_id, 
+                        )
+                    )
+                    if foresight_memories:
+                        memcell.foresights = foresight_memories
+
+                        # Simulate an in-place mutation of the memory-unit.
+                        memcell_snapshot = {} 
+                        runtime_foresights = None 
+                        if tracing_ctx is not None and is_tracing_enabled():
+                            runtime_foresights = tracing_ctx.get_variable("foresights")
+                            memcell_snapshot = runtime_memcell_snapshot.value
+
+                        with comment_mutation(
+                            target=memcell_snapshot,
+                            inputs=[runtime_foresights],
+                            comment=(
+                                "This is a further refined memory-unit after the memory "
+                                "system enriches it with the structured foresight memories "
+                                "derived from the memory unit's original data."
+                            ),
+                            encoding_fn=partial(
+                                json.dumps,
+                                ensure_ascii=False,
+                                indent=4,
+                                sort_keys=True,
+                            ),
+                            category="memory_entry",
+                            decoding_fn=json.loads,
+                            id_strategy="evermemos-dict",
+                            mutation_comment=(
+                                "The memory system further refines the current memory-unit "
+                                "by writing the structured foresight memories derived from "
+                                "the memory unit's original data back into the memory-unit."
+                            ), 
+                            reuse_op=True,
+                        ) as memcell_mutation_scope: 
+                            memcell_snapshot["foresights"] = runtime_foresights.value
+
+                        runtime_memcell_snapshot = memcell_mutation_scope.result
+                        if tracing_ctx is not None and is_tracing_enabled():
+                            tracing_ctx.register_variable(
+                                "memcell_result", 
+                                runtime_memcell_snapshot,
+                                overwrite=True,
+                            )
+
+                        if runtime_foresights is not None:
+                            tracing_ctx.remove_variable("foresights")
+            else:
+                # Episode extraction failed - raise exception, don't hide errors
+                raise ValueError(
+                    f"❌ Episode extraction failed! conv_id={self.config.group_id}, memcell_id={memcell.event_id}"
+                )
+
+            # Extract Event Log (if enabled)
+            if self._event_log_extractor and episode_memory and episode_memory.episode:
+                event_log = await self._event_log_extractor.extract_event_log(
+                    memcell=memcell,
+                    timestamp=memcell.timestamp,
+                )
+                if event_log:
+                    memcell.event_log = event_log
+
+                    # Simulate an in-place mutation of the memory-unit.
+                    memcell_snapshot = {} 
+                    runtime_event_log = None 
+                    if tracing_ctx is not None and is_tracing_enabled():
+                        runtime_event_log = tracing_ctx.get_variable("event_log")
+                        memcell_snapshot = runtime_memcell_snapshot.value
+
+                    with comment_mutation(
+                        target=memcell_snapshot,
+                        inputs=[runtime_event_log],
+                        comment=(
+                            "This is a further refined memory-unit after the memory "
+                            "system enriches it with the structured retrieval-oriented "
+                            "event-log extracted from the memory unit's original data."
+                        ),
+                        encoding_fn=partial(
+                            json.dumps,
+                            ensure_ascii=False,
+                            indent=4,
+                            sort_keys=True,
+                        ),
+                        category="memory_entry",
+                        decoding_fn=json.loads,
+                        id_strategy="evermemos-dict",
+                        mutation_comment=(
+                            "The memory system further refines the current memory-unit "
+                            "by writing the structured retrieval-oriented event-log "
+                            "back into the memory-unit."
+                        ), 
+                        reuse_op=True,
+                    ) as memcell_mutation_scope: 
+                        if runtime_event_log is not None:
+                            memcell_snapshot["event_log"] = runtime_event_log.value
+
+                    runtime_memcell_snapshot = memcell_mutation_scope.result
+                    if tracing_ctx is not None and is_tracing_enabled():
+                        tracing_ctx.register_variable(
+                            "memcell_result", 
+                            runtime_memcell_snapshot,
+                            overwrite=True,
+                        )
+
+                    if runtime_event_log is not None:
+                        tracing_ctx.remove_variable("event_log")
+            
+            # Clustering (if enabled)
+            if self._cluster_manager and self._cluster_state:
+                # Incremental clustering: Update the current cluster state  
+                _, self._cluster_state = await self._cluster_manager.cluster_memcell(
+                    memcell.to_dict(),
+                    self._cluster_state,
+                )
+            
+            # Add to index
+            await self._index_manager.add_memcell(memcell)
+
+            if tracing_ctx is not None and is_tracing_enabled():
+                memcell_snapshot = runtime_memcell_snapshot.value
+                with comment_mutation(
+                    target=memcell_snapshot,
+                    comment=(
+                        "This is the final memory-unit prepared for downstream memory "
+                        "use and storage."
+                    ),
+                    encoding_fn=partial(
+                        json.dumps,
+                        ensure_ascii=False,
+                        indent=4,
+                        sort_keys=True,
+                    ),
+                    category="memory_entry",
+                    decoding_fn=json.loads,
+                    id_strategy="evermemos-dict",
+                    mutation_comment=(
+                        "After memory extraction is complete, the memory system "
+                        "conceptually removes the raw original data from the current "
+                        "memory-unit, forms the final memory unit for downstream use, "
+                        "and places that final memory unit into the memory store."
+                    ),
+                    reuse_op=True,
+                ):
+                    memcell_snapshot.pop("original_data")
+            
+            # Store MemCell
+            self._memcells.append(memcell)
+            self._stats["memcells_extracted"] += 1
         
         # Update profiles for user roles
         await self._update_profiles_for_users(memcell)
         
         # Clear buffer
-        self._message_buffer = []
+        # The original implementation clears the message buffer by reassigning
+        # `self._message_buffer` instead of mutating that list strictly in place.
+        # Therefore, this mutation is traced on the parent container `self`,
+        # while the encoder projects only the embedded message-buffer field.
+        with comment_mutation(
+            target=self,
+            comment=(
+                "A message buffer that stores messages " 
+                "not yet processed by the memory system. " 
+                "Its data structure is a list."
+            ),
+            id_strategy=lambda _: "message-buffer",
+            encoding_fn=lambda memory_manager: json.dumps(
+                memory_manager._message_buffer,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            decoding_fn=json.loads,
+            mutation_name="memory_system.message_buffer_update",
+            mutation_category="update",
+            mutation_comment=(
+                "After the remaining messages are flushed into a final memory unit, "
+                "the memory system clears the message buffer."
+            ),
+            mutation_metadata={
+                "flush": True,
+            },
+        ):
+            self._message_buffer = []
+
+        # Remove the tracing variables. 
+        if tracing_ctx is not None and is_tracing_enabled():
+            tracing_ctx.remove_variable("memcell_result")
         
         return memcell
     

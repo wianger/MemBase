@@ -1,3 +1,12 @@
+import json
+import os
+from functools import partial
+from smartcomment import (
+    is_tracing_enabled, 
+    comment_variable, 
+    IdentityRegistry,
+    current_context,
+)
 from .base import MemBaseLayer 
 from ..baselines.evermemos.online_memory.config import OnlineMemoryManagerConfig
 from ..baselines.evermemos.online_memory.memory_manager import OnlineMemoryManager 
@@ -9,13 +18,32 @@ from ..utils import (
 )
 from ..model_types.memory import MemoryEntry
 from ..model_types.dataset import Message
-import json
-import os
 from typing import Any, ClassVar
 
 
-class EverMemOSLayer(MemBaseLayer):
+def _get_evermemos_dict_variable_identity(variable: dict) -> str:
+    """Get the identity of a memory unit in the EverMemOS layer."""
+    if not isinstance(variable, dict):
+        raise TypeError(
+            f"The provided variable '{variable}' is not a dictionary."
+        )
+
+    if "event_id" in variable:
+        return f"memory-unit-{variable['event_id']}"
     
+    raise ValueError(
+        f"It is unable to extract the identity from the provided variable '{variable}'."
+    )
+
+IdentityRegistry.register(
+    "evermemos-dict",
+    _get_evermemos_dict_variable_identity,
+    exist_ok=True,
+)
+
+
+class EverMemOSLayer(MemBaseLayer):
+
     layer_type: ClassVar[str] = "EverMemOS"
     
     def __init__(self, config: EverMemOSConfig) -> None:
@@ -40,16 +68,55 @@ class EverMemOSLayer(MemBaseLayer):
             "name": message.name,
             "content": message.content,
         }
-        
+
+        msg_meta = {
+            **message.metadata,
+            "timestamp": message.timestamp,
+            "speaker": message.name,
+        }
+
+        # In EverMemOS, messages are strictly processed one at a time.
+        comment_variable(
+            {
+                "name": message.name,
+                "role": message.role,
+                "content": message.content,
+                "timestamp": message.timestamp,
+            },
+            variable_name="raw_input", 
+            id_strategy=lambda _: message.id,
+            encoding_fn=partial(
+                json.dumps,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ), 
+            decoding_fn=json.loads,
+            category="message",
+            metadata=msg_meta,
+            comment=(
+                "An input message fed into the memory pipeline. "
+                "It triggers the memory system to extract valuable information " 
+                "that is worth storing in the memory store. "
+                "The name denotes the speaker of the message, the role denotes " 
+                "the role of the speaker, and the timestamp denotes the time when " 
+                "the message is sent."
+            ),
+        )
+
         try:
             self.memory_layer.add_message(
-                message_dict,
+                message_dict, 
                 timestamp=message.timestamp,
                 **kwargs,
             )
         except Exception as e:
             print(f"Error in add_message method in EverMemOSLayer: \n\t{e.__class__.__name__}: {e}")
-    
+        finally:
+            ctx = current_context()
+            if ctx is not None:
+                ctx.remove_variable("raw_input")
+
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
         for message in messages:
             self.add_message(message, **kwargs)
@@ -69,16 +136,25 @@ class EverMemOSLayer(MemBaseLayer):
             subject = doc.get("subject", "N/A")
             episode = doc.get("episode", "N/A")
             doc_text = f"{subject}: {episode}"
+
+            metadata = {
+                "id": doc["event_id"],
+                "subject": doc.get("subject", ""),
+                "summary": doc.get("summary", ""),
+                "score": float(score), 
+            }
+            if is_tracing_enabled():
+                metadata["trace_id"] = _get_evermemos_dict_variable_identity(
+                    {"event_id": metadata["id"]}
+                )
+
             memory_entry = MemoryEntry(
                 content=doc.get("episode", ""),
-                metadata={
-                    "subject": doc.get("subject", ""),
-                    "summary": doc.get("summary", ""),
-                    "score": float(score), 
-                },
+                metadata=metadata,
                 formatted_content=doc_text,
             )
             outputs.append(memory_entry)
+
         return outputs
     
     def delete(self, memory_id: str) -> bool:

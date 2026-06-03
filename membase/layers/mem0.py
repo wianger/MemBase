@@ -2,10 +2,17 @@ import os
 os.environ["MEM0_TELEMETRY"] = "False" # Disable telemetry.
 
 import json
-from mem0 import Memory
-from mem0.configs.base import MemoryConfig
-from mem0.memory.storage import SQLiteManager
-from mem0.utils.factory import (
+from functools import partial
+from smartcomment import (
+    comment_variable, 
+    current_context, 
+    is_tracing_enabled,
+    IdentityRegistry,
+)
+from ..baselines.mem0 import Memory
+from ..baselines.mem0.configs.base import MemoryConfig
+from ..baselines.mem0.memory.storage import SQLiteManager
+from ..baselines.mem0.utils.factory import (
     EmbedderFactory,
     GraphStoreFactory,
     LlmFactory,
@@ -22,6 +29,27 @@ from ..configs.mem0 import Mem0Config
 from ..model_types.memory import MemoryEntry
 from ..model_types.dataset import Message
 from typing import Any, ClassVar
+
+
+def _get_mem0_dict_variable_identity(variable: dict) -> str: 
+    """Get the identity of a memory unit in the Mem0 layer."""
+    if not isinstance(variable, dict):
+        raise TypeError(
+            f"The provided variable '{variable}' is not a dictionary."
+        )
+        
+    if "id" in variable:
+        return f"memory-unit-{variable['id']}"
+    
+    raise ValueError(
+        f"It is unable to extract the identity from the provided variable '{variable}'."
+    )
+
+IdentityRegistry.register(
+    "mem0-dict", 
+    _get_mem0_dict_variable_identity, 
+    exist_ok=True,
+)
 
 
 class Mem0Memory(Memory):
@@ -107,24 +135,61 @@ class Mem0Layer(MemBaseLayer):
             f"Speaker Name: {message.name}\n"
             f"Speaker Role: {message.role}\n"
         )
+        msg_meta = {
+            **message.metadata,
+            "timestamp": message.timestamp, 
+            "speakers": message.name,
+        }
+
+        # We just put the raw input message directly into the current tracing context.
+        # Its variable name is ``raw_input`` and it is a normal string. 
+        comment_variable(
+            {
+                "content": text, 
+                "name": message.name,
+                "role": message.role,
+                "timestamp": message.timestamp,
+            },
+            variable_name="raw_input_1", 
+            id_strategy=lambda _: message.id, 
+            encoding_fn=partial(
+                json.dumps, 
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            category="message", 
+            metadata=msg_meta,
+            comment=(
+                "An input message fed into the memory pipeline. "
+                "It triggers the memory system to extract valuable information " 
+                "that is worth storing in the memory store. "
+                "The name denotes the speaker of the message, the role denotes " 
+                "the role of the speaker, and the timestamp denotes the time when " 
+                "the message is sent."
+            ),
+        )
 
         # Following Mem0's implementation (https://github.com/mem0ai/mem0/blob/main/evaluation/src/memzero/add.py#L83).
         try:
             self.memory_layer.add(
                 messages={
-                    "content": text,
                     "role": message.role,
+                    "content": text,
                     "name": message.name,
                 },
                 user_id=self.config.user_id,
-                metadata={
-                    "timestamp": message.timestamp, 
-                    "speakers": message.name,
-                },
+                metadata=msg_meta,
                 **kwargs, 
             )
         except Exception as e:
             print(f"Error in add_message method in Mem0Layer: \n\t{e.__class__.__name__}: {e}")
+        finally:
+            ctx = current_context()
+            if ctx is not None:
+                # It behaves like deleting the variable directly
+                # to avert the memory leak or collision with other variables.
+                ctx.remove_variable("raw_input_1")
 
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
         message_level = kwargs.pop("message_level", True)
@@ -139,7 +204,7 @@ class Mem0Layer(MemBaseLayer):
                 self.add_message(message, **kwargs)
         else:
             new_messages = [] 
-            for message in messages:
+            for i, message in enumerate(messages, start=1):
                 msg_dict = message.model_dump(mode="python")
                 msg_dict["content"] = (
                     f"{message.content}\nBelow is this message's metadata:\n"
@@ -147,7 +212,39 @@ class Mem0Layer(MemBaseLayer):
                     f"Speaker Role: {message.role}\n"
                 )
                 new_messages.append(msg_dict)
-            
+                
+                comment_variable(
+                    {
+                        "content": msg_dict["content"],
+                        "name": message.name,
+                        "role": message.role,
+                        "timestamp": message.timestamp,
+                    },
+                    variable_name=f"raw_input_{i}",
+                    id_strategy=lambda text: message.id,
+                    encoding_fn=partial(
+                        json.dumps, 
+                        ensure_ascii=False,
+                        indent=4,
+                        sort_keys=True,
+                    ),
+                    category="message",
+                    metadata={
+                        **message.metadata,
+                        "timestamp": message.timestamp,
+                        "speakers": message.name,
+                    },
+                    comment=(
+                        f"It is the {i}-th message of {len(messages)} in a batched conversation snippet. "
+                        "The memory system receives the full snippet in one call. " 
+                        "The snippet as a whole triggers the memory system to extract valuable information " 
+                        "that is worth storing in the memory store. "
+                        "The name denotes the speaker of the message, the role denotes " 
+                        "the role of the speaker, and the timestamp denotes the time when " 
+                        "the message is sent."
+                    ),
+                )
+
             try:
                 self.memory_layer.add(
                     messages=new_messages,
@@ -162,10 +259,15 @@ class Mem0Layer(MemBaseLayer):
                             )
                         ),
                     },
-                    **kwargs,
+                    **kwargs, 
                 )
             except Exception as e:
                 print(f"Error in add_messages method in Mem0Layer: \n\t{e.__class__.__name__}: {e}")
+            finally:
+                ctx = current_context()
+                if ctx is not None:
+                    for i in range(1, len(messages) + 1):
+                        ctx.remove_variable(f"raw_input_{i}")
 
     def retrieve(self, query: str, k: int = 10, **kwargs: Any) -> list[MemoryEntry]:
         result = self.memory_layer.search(
@@ -196,6 +298,11 @@ class Mem0Layer(MemBaseLayer):
             if graph_text:
                 parts.append(graph_text)
             formatted = "\n".join(parts)
+
+            if is_tracing_enabled():
+                metadata["trace_id"] = _get_mem0_dict_variable_identity(
+                    {"id": metadata["id"]}
+                )
 
             outputs.append(
                 MemoryEntry(

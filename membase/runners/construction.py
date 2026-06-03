@@ -12,6 +12,12 @@ from pydantic import (
     Field,
 )
 from tqdm import tqdm
+from smartcomment import (
+    comment_graph,
+    comment_session,
+    enable_tracing,
+    disable_tracing,
+)
 from ..configs import CONFIG_MAPPING
 from ..datasets import DATASET_MAPPING, ONLINE_EVAL_ENV_MAPPING
 from ..datasets.online_base import OnlineMemBaseDataset, OnlineEvalEnv
@@ -43,6 +49,7 @@ def memory_construction(
     rerun: bool = False,
     message_preprocessor: Callable[[Message], Message] | None = None,
     strict: bool = True,
+    traced_data_save_dir: str | None = None,
     dataset_cls: type[MemoryDataset] | None = None,
     online_eval_env: OnlineEvalEnv | None = None,
 ) -> dict[str, float | list[OnlineEvalResult]]: 
@@ -69,9 +76,12 @@ def memory_construction(
             If it is enabled, any error raised by the memory layer during memory construction 
             will propagate and abort the trajectory. If it is disabled, such errors are logged 
             and the message is skipped so the remaining trajectory can continue.
+        traced_data_save_dir (`str | None`, optional):
+            Directory where execution graph artefacts are saved. If not provided,
+            the graph saving is skipped.
         dataset_cls (`type[MemoryDataset] | None`, optional):
             The dataset class. When it is an online dataset, the memory construction process is 
-            routed to its evaluation logic.
+            routed to its evaluation logic for task messages.
         online_eval_env (`OnlineEvalEnv | None`, optional):
             Evaluation environment for online datasets. If not provided, online
             evaluation is skipped even for task messages.
@@ -118,93 +128,144 @@ def memory_construction(
             return output
     
     specs = layer.get_patch_specs() 
-    with MonkeyPatcher(specs):
-        total_msgs = sum(len(session) for session in trajectory) 
-        pbar_desc = f"🧑 User Identifier: {user_id} | 🧠 Memory Layer Type: {layer_type}" 
-        pbar = tqdm(
-            total=total_msgs,
-            desc=pbar_desc,
-            leave=False,   
-        )
 
-        num_add_failed = 0
-        num_eval_failed = 0
-        for session in trajectory:
-            for message in session:
-                start_time = datetime.now() 
-                message = message.model_copy(deep=True)
-                message = message_preprocessor(message)
-
-                try:
-                    if message.metadata.get("is_task"):
-                        if is_online:
-                            eval_result = dataset_cls.online_evaluate(
-                                message, 
-                                layer, 
-                                online_eval_env,
-                            )
-                            output["eval_results"].extend(eval_result)
-                        else:
-                            if dataset_cls is not None:
-                                warnings.warn(
-                                    f"Message '{message.id}' is marked as a task but "
-                                    f"dataset '{dataset_cls.__name__}' does not support "
-                                    "online evaluation. It falls back to normal memory construction.",
-                                    UserWarning,
-                                )
-                            layer.add_message(message)
-                    else:
-                        layer.add_message(message)
-                except Exception as e:
-                    if strict:
-                        pbar.close()
-                        raise
-                    if message.metadata.get("is_task") and is_online:
-                        num_eval_failed += 1
-                        print(
-                            "⚠️ Online evaluation fails for a task message "
-                            f"'{message.id}' for user '{user_id}': "
-                            f"{e.__class__.__name__}: {e}"
-                        )
-                    else:
-                        num_add_failed += 1
-                        print(
-                            "⚠️ The message is skipped because the memory layer "
-                            f"fails to add it for user '{user_id}': "
-                            f"{e.__class__.__name__}: {e}"
-                        )
-
-                end_time = datetime.now() 
-                output["total_add_time"] += (end_time - start_time).total_seconds()
-
-                pbar.update(1) 
-                time.sleep(0.2)
-        pbar.close()
-
-        total_failed = num_add_failed + num_eval_failed
-        if total_failed > 0:
-            parts = []
-            if num_add_failed > 0:
-                parts.append(f"{num_add_failed} message addition failure(s)")
-            if num_eval_failed > 0:
-                parts.append(f"{num_eval_failed} online evaluation failure(s)")
-            print(
-                f"⚠️ {total_failed}/{total_msgs} messages are not processed successfully "
-                f"for user '{user_id}': {', '.join(parts)}."
+    with comment_graph(
+        user_id=user_id, 
+        project_id=layer_type, 
+        strict=True,
+        metadata={
+            "save_dir": config.save_dir, 
+            "layer_type": layer_type, 
+            "traj_metadata": trajectory.metadata,
+            "traced_data_save_dir": traced_data_save_dir,
+            "dataset_cls": dataset_cls.__name__ if dataset_cls is not None else None,
+        },
+    ) as graph:
+        with MonkeyPatcher(specs):
+            total_msgs = sum(len(session) for session in trajectory) 
+            pbar_desc = f"🧑 User Identifier: {user_id} | 🧠 Memory Layer Type: {layer_type}" 
+            pbar = tqdm(
+                total=total_msgs,
+                desc=pbar_desc,
+                leave=False,   
             )
-    
-    start_time = datetime.now()   
-    # It may include I/O operations (loading a sentence embedding model). 
-    with _LOCK:
-        layer.flush()
-    end_time = datetime.now()  
-    output["total_add_time"] += (end_time - start_time).total_seconds() 
+
+            num_add_failed = 0
+            num_eval_failed = 0
+            for i, session in enumerate(trajectory, start=1):
+                with comment_session(
+                    session_id=session.id, 
+                    comment=f"It is the {i}th conversational session.", 
+                    category="memory_construction",
+                    metadata=session.metadata,
+                ):
+                    for message in session:
+                        start_time = datetime.now() 
+                        message = message.model_copy(deep=True)
+                        message = message_preprocessor(message)
+
+                        try:
+                            if message.metadata.get("is_task"):
+                                if is_online:
+                                    eval_result = dataset_cls.online_evaluate(
+                                        message, 
+                                        layer, 
+                                        online_eval_env,
+                                    )
+                                    output["eval_results"].extend(eval_result)
+                                else:
+                                    if dataset_cls is not None:
+                                        warnings.warn(
+                                            f"Message '{message.id}' is marked as a task but "
+                                            f"dataset '{dataset_cls.__name__}' does not support "
+                                            "online evaluation. It falls back to normal memory construction.",
+                                            UserWarning,
+                                        )
+                                    layer.add_message(message)
+                            else:
+                                layer.add_message(message)
+                        except Exception as e:
+                            if strict:
+                                pbar.close()
+                                raise
+                            if message.metadata.get("is_task") and is_online:
+                                num_eval_failed += 1
+                                print(
+                                    "⚠️ Online evaluation fails for a task message "
+                                    f"'{message.id}' for user '{user_id}': "
+                                    f"{e.__class__.__name__}: {e}"
+                                )
+                            else:
+                                num_add_failed += 1
+                                print(
+                                    "⚠️ The message is skipped because the memory layer "
+                                    f"fails to add it for user '{user_id}': "
+                                    f"{e.__class__.__name__}: {e}"
+                                )
+
+                        end_time = datetime.now() 
+                        output["total_add_time"] += (end_time - start_time).total_seconds()
+
+                        pbar.update(1) 
+                        time.sleep(0.2)
+            pbar.close()
+
+            total_failed = num_add_failed + num_eval_failed
+            if total_failed > 0:
+                parts = []
+                if num_add_failed > 0:
+                    parts.append(f"{num_add_failed} message addition failure(s)")
+                if num_eval_failed > 0:
+                    parts.append(f"{num_eval_failed} online evaluation failure(s)")
+                print(
+                    f"⚠️ {total_failed}/{total_msgs} messages are not processed successfully "
+                    f"for user '{user_id}': {', '.join(parts)}."
+                )
+     
+        with comment_session(
+            comment=(
+                "It is the finalization stage of memory construction. " 
+                "This stage ensures all messages have been fully ingested " 
+                "into the memory layer and the internal memory state is consistent."
+            ),
+            category="memory_construction",
+        ):
+            start_time = datetime.now()   
+            # It may include I/O operations (loading a sentence embedding model).
+            with _LOCK:
+                layer.flush()
+            end_time = datetime.now()  
+            output["total_add_time"] += (end_time - start_time).total_seconds() 
 
     # It includes I/O operations. 
     with _LOCK:
         layer.save_memory() 
         layer.cleanup()
     output["avg_add_time"] = output["total_add_time"] / len(trajectory)
+
+    # Finally, if the tracing is enabled, we export the graph to a JSON file.
+    if graph is not None and traced_data_save_dir is not None:
+        graph_data = graph.export_graph()
+        traced_data_path = os.path.join(
+            traced_data_save_dir,
+            user_id,
+            "graph_construction.json",
+        )
+        os.makedirs(
+            os.path.dirname(traced_data_path), 
+            exist_ok=True
+        )
+        with open(
+            traced_data_path, 
+            "w", 
+            encoding="utf-8",
+        ) as f:
+            json.dump(
+                graph_data, 
+                f, 
+                indent=4, 
+                ensure_ascii=False,
+            )
 
     return output 
 
@@ -297,15 +358,28 @@ class ConstructionRunnerConfig(BaseModel):
         default=None,
         description="Path to a JSON config for the online evaluation environment.",
     )
+    traced_data_save_dir: str = Field(
+        default="traced_data",
+        description="Directory where execution graph artefacts are saved.",
+    )
+    tracing: bool = Field(
+        default=False,
+        description=(
+            "Whether to enable execution graph tracing. "
+            "Note that this only applies to memory systems that currently support tracing."
+        ),
+    )
 
 
 class ConstructionRunner:
-    """Runner that orchestrates the memory construction stage.
+    """The runner that orchestrates the memory construction stage.
 
-    It loads the dataset, sets up token-cost monitoring, and dispatches 
-    per-trajectory construction tasks to a thread pool.  For online-capable
-    datasets, it also resolves the evaluation environment and collects,
-    aggregates, and persists evaluation results.
+    It loads the dataset, sets up token-cost monitoring, and dispatches
+    per-trajectory construction tasks to a thread pool. When tracing is
+    enabled, it records the memory construction flow for memory systems that
+    currently support traced execution. For online-capable datasets, it also
+    resolves the evaluation environment and collects, aggregates, and persists
+    evaluation results.
     """
 
     def __init__(self, config: ConstructionRunnerConfig) -> None:
@@ -430,6 +504,11 @@ class ConstructionRunner:
         if start_idx >= end_idx:
             raise ValueError("The starting index must be less than the ending index.")
 
+        if cfg.tracing:
+            enable_tracing()
+        else:
+            disable_tracing()
+
         # Dispatch per-trajectory construction to a thread pool.
         results = []
         with ThreadPoolExecutor(max_workers=cfg.num_workers) as executor:
@@ -446,6 +525,7 @@ class ConstructionRunner:
                     rerun=cfg.rerun,
                     message_preprocessor=cfg.message_preprocessor,
                     strict=cfg.strict,
+                    traced_data_save_dir=cfg.traced_data_save_dir,
                     dataset_cls=ds_cls,
                     online_eval_env=online_eval_env,
                 )
@@ -465,7 +545,7 @@ class ConstructionRunner:
         if len(results) == end_idx - start_idx:
             print("The memory construction process is completed successfully 😀.")
 
-        # Print construction timing statistics.
+        # Print statistics.
         total_time = 0.0
         avg_time_per_add_session = 0.0
         num_valid_trajectories = 0
@@ -492,7 +572,8 @@ class ConstructionRunner:
             metric_sums = {}
             metric_counts = {}
             for result in results:
-                for eval_result in result["eval_results"]:
+                result_user_id = result.get("user_id")
+                for eval_result in result.get("eval_results", []):
                     metrics = eval_result["metrics"]
                     rollout = eval_result["rollout"]
                     for metric_name, metric_val in metrics.items():
@@ -502,7 +583,7 @@ class ConstructionRunner:
 
                     all_eval_entries.append(
                         {
-                            "user_id": user_id,
+                            "user_id": result_user_id,
                             "metrics": metrics,
                             "rollout": [
                                 msg.model_dump(mode="python") for msg in rollout

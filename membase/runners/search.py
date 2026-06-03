@@ -1,4 +1,5 @@
 import json
+import os 
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
@@ -8,6 +9,16 @@ from pydantic import (
     Field,
 )
 from tqdm import tqdm
+from smartcomment import (
+    comment_graph,
+    comment_session,
+    comment_variable,
+    enable_tracing,
+    disable_tracing,
+    current_context, 
+    is_tracing_enabled,
+)
+from smartcomment.runtime import ExecNetwork
 from ..configs import CONFIG_MAPPING
 from ..datasets import DATASET_MAPPING
 from ..layers import MEMORY_LAYERS_MAPPING
@@ -26,6 +37,7 @@ def memory_search(
     config: dict[str, Any] | None = None,
     top_k: int = 10,
     strict: bool = True, 
+    traced_data_save_dir: str | None = None, 
 ) -> list[dict[str, Any]]:
     """Search memories for a given user based on questions.
 
@@ -46,6 +58,9 @@ def memory_search(
         strict (`bool`, defaults to `True`): 
             If `True`, raise an error when no memory is found for the user.
             If `False`, return a placeholder entry instead.
+        traced_data_save_dir (`str | None`, optional):
+            Directory where execution graph artefacts are saved. If not provided,
+            the graph importing and exporting are skipped.
 
     Returns:
         `list[dict[str, Any]]`: 
@@ -81,7 +96,9 @@ def memory_search(
                             MemoryEntry(
                                 content="[NO RETRIEVED MEMORIES]",
                                 formatted_content="[NO RETRIEVED MEMORIES]",
-                                metadata={},
+                                metadata={
+                                    "trace_id": "[NO RETRIEVED MEMORIES]",
+                                },
                             ).model_dump(mode="python")
                         ],
                         "qa_pair": qa_pair.model_dump(mode="python"),
@@ -89,33 +106,109 @@ def memory_search(
                     }
                     for qa_pair in questions 
                 ]
-    
-    retrievals = []
-    total_q = len(questions) 
-    pbar = tqdm(
-        questions,
-        total=total_q,
-        desc=f"🧑 User Identifier: {user_id} | 🧠 Memory Layer Type: {layer_type}",
-        leave=False,      
-    )
 
-    # Perform retrieval for each question.
-    for qa_pair in pbar:
-        query = qa_pair.question
-        # Perform retrieval using the unified interface.
-        retrieved_memories = layer.retrieve(query, k=top_k)
-        retrieval_result = {
-            "retrieved_memories": [
-                memory.model_dump(mode="python")
-                for memory in retrieved_memories
-            ],
-            "qa_pair": qa_pair.model_dump(mode="python"),
-            "user_id": user_id,
-        }
-        retrievals.append(retrieval_result)
+    imported_graph = None
+    if traced_data_save_dir is not None:
+        traced_data_path = os.path.join(
+            traced_data_save_dir,
+            user_id,
+            "graph_construction.json",
+        )
+        if os.path.exists(traced_data_path):
+            with open(traced_data_path, "r", encoding="utf-8") as f:
+                graph_data = json.load(f)
+            imported_graph = ExecNetwork.import_graph(graph_data)
+        else:
+            print(
+                f"The execution graph for user '{user_id}' is not found "
+                f"in the path '{traced_data_path}'."
+            )
+
+    # If we import an existing execution graph, we continue tracing from it.
+    # For this case, we don't need to care about the user identifier, 
+    # project identifier, strict mode and etc.
+    # As these data are already included in the existing execution graph.
+    with comment_graph(graph=imported_graph) as graph:
+        # We create a new session for the memory search.
+        # We take the related hyperparameters as metadata.
+        with comment_session(
+            category="memory_search",
+            comment="Based on a list of questions, we search the memory for each question.",
+            metadata={
+                "top_k": top_k,
+                "strict": strict,
+            }, 
+        ):
+            # Get the current tracing context.
+            tracing_ctx = current_context()
+
+            retrievals = []
+            total_q = len(questions) 
+            pbar = tqdm(
+                questions,
+                total=total_q,
+                desc=f"🧑 User Identifier: {user_id} | 🧠 Memory Layer Type: {layer_type}",
+                leave=False,      
+            )
+
+            # Perform retrieval for each question.
+            for qa_pair in pbar:
+                query = qa_pair.question
+
+                # Record the input query as a variable.
+                comment_variable(
+                    query,
+                    variable_name="query",
+                    id_strategy=lambda _: qa_pair.id,
+                    category="message & query",
+                    class_name="query", 
+                    comment=(
+                        "A task query which requires the memory system " 
+                        "to retrieve relevant memories."
+                    ),
+                    metadata=qa_pair.metadata,
+                )
+
+                # Perform retrieval using the unified interface.
+                retrieved_memories = layer.retrieve(query, k=top_k)
+                retrieval_result = {
+                    "retrieved_memories": [
+                        memory.model_dump(mode="python")
+                        for memory in retrieved_memories
+                    ],
+                    "qa_pair": qa_pair.model_dump(mode="python"),
+                    "user_id": user_id,
+                }
+                retrievals.append(retrieval_result)
+
+                if tracing_ctx is not None and is_tracing_enabled():
+                    tracing_ctx.remove_variable("query")
     
     with _LOCK:
         layer.cleanup()
+
+    if graph is not None and traced_data_save_dir is not None:
+        graph_data = graph.export_graph()
+        traced_data_path = os.path.join(
+            traced_data_save_dir,
+            user_id,
+            "graph_search.json",
+        )
+        os.makedirs(
+            os.path.dirname(traced_data_path), 
+            exist_ok=True
+        )
+        with open(
+            traced_data_path, 
+            "w", 
+            encoding="utf-8",
+        ) as f:
+            json.dump(
+                graph_data, 
+                f, 
+                indent=4, 
+                ensure_ascii=False,
+            )
     
     return retrievals
 
@@ -176,10 +269,21 @@ class SearchRunnerConfig(BaseModel):
         default=None,
         description="A callable that filters the evaluation questions.",
     )
+    traced_data_save_dir: str = Field(
+        default="traced_data",
+        description="Directory where execution graph artefacts are saved.",
+    )
+    tracing: bool = Field(
+        default=False,
+        description=(
+            "Whether to enable execution graph tracing. "
+            "Note that this only applies to memory systems that currently support tracing."
+        ),
+    )
 
 
 class SearchRunner:
-    """Runner that orchestrates the memory retrieval stage.
+    """The runner that orchestrates the memory retrieval stage.
 
     It loads the dataset, dispatches per-user retrieval tasks to a thread pool,
     and saves the aggregated results to a JSON file.
@@ -233,6 +337,11 @@ class SearchRunner:
         if start_idx >= end_idx:
             raise ValueError("The starting index must be less than the ending index.")
 
+        if cfg.tracing:
+            enable_tracing()
+        else:
+            disable_tracing()
+
         # Dispatch per-user retrieval to a thread pool.
         print("🔍 Searching memories for each trajectory...")
         retrievals = []
@@ -248,6 +357,7 @@ class SearchRunner:
                     config=config,
                     top_k=cfg.top_k,
                     strict=cfg.strict,
+                    traced_data_save_dir=cfg.traced_data_save_dir,
                 )
                 futures.append(future)
             for future in tqdm(
@@ -258,7 +368,6 @@ class SearchRunner:
                 results = future.result()
                 retrievals.extend(results)
 
-        # Save the retrieval results.
         output_path = (
             f"{config['save_dir']}/{cfg.top_k}_{start_idx}_{end_idx}.json"
         )

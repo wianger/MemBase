@@ -1,6 +1,14 @@
 import os
 import json
 from collections import deque
+from functools import partial
+from smartcomment import (
+    comment_mutation, 
+    comment_variable,
+    comment_op,
+    current_context,
+    is_tracing_enabled,
+) 
 from .base import MemBaseLayer
 from ._mixin import MessageBufferMixin
 from ..configs.long_context import LongContextConfig
@@ -25,16 +33,79 @@ class LongContextLayer(MemBaseLayer, MessageBufferMixin):
 
     def add_message(self, message: Message, **kwargs: Any) -> None:
         text = f"Speaker {message.name} (role: {message.role}) says: {message.content}\nTimestamp: {message.timestamp}"
-        self._buffer_and_get_doc(
-            message_content=text,
-            separator=self.config.message_separator,
+
+        runtime_raw_input = comment_variable(
+            {
+                "content": text,
+                "name": message.name,
+                "role": message.role,
+                "timestamp": message.timestamp,
+            },
+            to_runtime=True,
+            id_strategy=lambda _: message.id,
+            encoding_fn=partial(
+                json.dumps, 
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            decoding_fn=json.loads,
+            category="message",
+            metadata={
+                **message.metadata,
+                "timestamp": message.timestamp,
+                "speakers": message.name,
+            },
+            comment=(
+                "An input message fed into the memory pipeline. "
+                "It triggers the memory system to extract valuable information " 
+                "that is worth storing in the memory store. "
+                "The name denotes the speaker of the message, the role denotes " 
+                "the role of the speaker, and the timestamp denotes the time when " 
+                "the message is sent."
+            ),
         )
+
+        # In long-context settings
+        # the entire context is treated as a single, unified memory unit.
+        with comment_mutation(
+            target=self,
+            inputs=[runtime_raw_input],
+            comment=(
+                "A memory unit of the memory system."
+            ), 
+            category="memory_entry", 
+            id_strategy=lambda _: "memory-unit",
+            encoding_fn=lambda _: self._buffer_and_get_doc(),
+            mutation_name="memory_system.memory_update",
+            mutation_category="update",
+            mutation_comment=(
+                "Merge a new input message into the memory unit. "
+                "If the resulting token count exceeds the max-token budget, " 
+                "the oldest messages are trimmed so that the memory stays within " 
+                "the budget."
+            ),
+            mutation_metadata={
+                "context_window": self.config.context_window,
+                "message_separator": self.config.message_separator,
+                "llm_model_for_tokenizer": self.config.llm_model,
+            },
+        ):
+            self._buffer_and_get_doc(
+                message_content=text,
+                separator=self.config.message_separator,
+            )
 
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
         for message in messages:
             self.add_message(message, **kwargs)
 
     def retrieve(self, query: str, k: int = 10, **kwargs: Any) -> list[MemoryEntry]:
+        tracing_ctx = current_context()
+        runtime_query = None
+        if tracing_ctx is not None:
+            runtime_query = tracing_ctx.get_variable("query")
+
         # For the long-context baseline, we only return the history as the memory.
         # The total number of retrieved memories is always 1.
         # Therefore, `k` is ignored.
@@ -45,10 +116,38 @@ class LongContextLayer(MemBaseLayer, MessageBufferMixin):
             f"<long_context_memory>\n{history}\n</long_context_memory>\n"
             "This interaction trajectory is your long-term memory."
         )
+
+        comment_op(
+            inputs=[runtime_query], 
+            outputs=[
+                (
+                    history,
+                    {
+                        "id_strategy": lambda _: "memory-unit",
+                        "encoding_fn": lambda s: s,
+                        "category": "memory_entry",
+                    }
+                )
+            ], 
+            op_name="memory_system.retrieve",
+            category="retrieval",
+            comment=(
+                f"A task query searches the memory store for top-{k} relevant memories."
+            ),
+            metadata={
+                "top_k": k,
+            },
+        )
+        
+        metadata = {} 
+        if is_tracing_enabled():
+            metadata["trace_id"] = "memory-unit"
+
         return [
             MemoryEntry(
                 content=history,
                 formatted_content=formatted_history,
+                metadata=metadata,
             )
         ]
 

@@ -1,0 +1,6 @@
+{
+    "user_id": "guest",
+    "context_window": 32768,
+    "llm_model": "gpt-4.1-mini",
+    "save_dir": "examples/trace_memory_lifecycle_with_membase/traced_long_context"
+}

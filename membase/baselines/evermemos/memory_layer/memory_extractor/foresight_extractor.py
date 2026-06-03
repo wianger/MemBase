@@ -6,6 +6,14 @@ Generate predictions of potential impacts on user's future life and decisions fr
 import json
 from typing import List, Dict, Any, Optional, Literal
 from datetime import datetime, timedelta
+import inspect
+from smartcomment import (
+    current_context, 
+    is_tracing_enabled, 
+    comment_link,
+    comment_op, 
+    comment_variable,
+)
 
 from memory_layer.prompts import get_prompt_by
 from memory_layer.llm.llm_provider import LLMProvider
@@ -122,6 +130,19 @@ class ForesightExtractor(MemoryExtractor):
         Returns:
             List of foresight items (up to 10 items), including time information
         """
+        # Collect errors. 
+        errors = [] 
+
+        runtime_memcell_result = None 
+        tracing_ctx = current_context()
+        if tracing_ctx is not None and is_tracing_enabled():
+            # Get the runtime variable of the latest memory-unit.
+            runtime_memcell_result = tracing_ctx.get_variable("memcell_result")
+
+        runtime_prompt = None
+        runtime_response = None
+        runtime_prompt_template = None
+
         # Maximum 5 retries
         for retry in range(5):
             try:
@@ -140,6 +161,48 @@ class ForesightExtractor(MemoryExtractor):
                     USER_ID=user_id,
                     USER_NAME=user_name,
                     CONVERSATION_TEXT=conversation_text,
+                )
+
+                if runtime_prompt_template is None:
+                    runtime_prompt_template = comment_variable(
+                        prompt_template,
+                        to_runtime=True,
+                        id_strategy=lambda _: "foresight-generation-prompt-template",
+                        category="prompt",
+                        comment=(
+                            "A prompt template that asks the large language model to "
+                            "generate foresight memories from the current refined "
+                            "memory-unit."
+                        ),
+                        metadata={
+                            "op_type": "foresight_generation",
+                        },
+                    )
+
+                if runtime_prompt is None:
+                    runtime_prompt = comment_variable(
+                        prompt,
+                        to_runtime=True,
+                        class_name="foresight_generation_prompt",
+                        category="prompt",
+                        comment=(
+                            "A concrete foresight-generation prompt assembled from "
+                            "the refined memory-unit and the foresight prompt template."
+                        ),
+                    )
+
+                comment_op(
+                    inputs=[
+                        runtime_memcell_result,
+                        runtime_prompt_template,
+                    ],
+                    outputs=[runtime_prompt],
+                    comment=(
+                        "The memory system assembles the concrete foresight-generation "
+                        "prompt from the refined memory-unit and the foresight prompt "
+                        "template."
+                    ),
+                    reuse_op=True,
                 )
 
                 # Call LLM to generate associations
@@ -176,21 +239,120 @@ class ForesightExtractor(MemoryExtractor):
                         f"Generated foresight associations less than 4, actual count: {len(foresights)}"
                     )
 
+
+                runtime_response = comment_variable(
+                    response,
+                    to_runtime=True,
+                    class_name="raw_foresight_generation_response",
+                    category="llm_response",
+                    comment=(
+                        "A raw foresight-generation response from the large language "
+                        "model."
+                    ),
+                )
+                comment_link(
+                    source=runtime_prompt,
+                    target=runtime_response,
+                    comment=(
+                        "The large language model generates foresight memories based "
+                        "on the concrete foresight-generation prompt."
+                    ),
+                )
+
                 logger.info(
                     f"✅ Successfully generated {len(foresights)} foresight associations"
                 )
                 for i, memory in enumerate(foresights[:3], 1):
                     logger.info(f"  Association {i}: {memory.foresight}")
 
+                foresight_snapshots = [
+                    {
+                        "foresight": item.foresight,
+                        "evidence": item.evidence,
+                        "start_time": item.start_time,
+                        "end_time": item.end_time,
+                        "duration_days": item.duration_days,
+                    }
+                    for item in foresights
+                ]
+                runtime_foresights = comment_variable(
+                    foresight_snapshots,
+                    variable_name="foresights",
+                    to_runtime=True,
+                    class_name="foresight_list",
+                    category="llm_response",
+                    encoding_fn=lambda value: json.dumps(
+                        value,
+                        ensure_ascii=False,
+                        indent=4,
+                        sort_keys=True,
+                    ),
+                    decoding_fn=json.loads,
+                    comment=(
+                        "A structured list of foresight memories parsed from the "
+                        "large language model's response."
+                    ),
+                )
+                comment_link(
+                    source=runtime_response,
+                    target=runtime_foresights,
+                    comment=(
+                        "The memory system parses the raw foresight-generation "
+                        "response into a structured list of foresight memories."
+                    ),
+                    edge_metadata={
+                        "source_code": (
+                            inspect.getsource(self._parse_foresights_response)
+                            + "\n\n"
+                            + inspect.getsource(self._clean_date_string)
+                        )
+                    }, 
+                )
+
                 return foresights
 
             except Exception as e:
                 logger.warning(f"Foresight generation retry {retry+1}/5: {e}")
+                errors.append(
+                    f"Attempt {retry + 1} fails because foresight generation raises "
+                    f"{e.__class__.__name__}: {e}."
+                )
                 if retry == 4:
                     logger.error(f"Foresight generation failed after 5 retries")
+
+                    failed_marker = comment_variable(
+                        "FAILED",
+                        to_runtime=True,
+                        category="marker",
+                        class_name="failed_marker",
+                        comment=(
+                            "A marker indicating that the process fails."
+                        ),
+                    )
+                    comment_link(
+                        source=runtime_prompt,
+                        target=failed_marker,
+                        comment=(
+                            "The memory system fails to generate foresight memories "
+                            "after five attempts."
+                        ),
+                        edge_metadata={
+                            "error": (
+                                "The memory system attempts foresight generation five "
+                                "times and fails to obtain a valid structured foresight "
+                                "list each time.\n\n"
+                                + "\n\n".join(errors)
+                            ),
+                        },
+                    )
+
                     return []
                 continue
 
+        # All retries exhausted, return default result
+        logger.error(
+            f"[ForesightExtractor] All 5 retries exhausted for foresight generation, returning default (foresights=[])"
+        )
         return []
 
     @staticmethod

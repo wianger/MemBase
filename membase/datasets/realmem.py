@@ -1,11 +1,21 @@
 import json
 import os
 import re
+import inspect
 from datetime import datetime, timedelta
 from pydantic import (
     Field,
     PrivateAttr,
     model_validator,
+)
+from smartcomment import (
+    comment_session,
+    comment_op_scope,
+    comment_op,
+    comment_variable,
+    comment_link,
+    current_context,
+    is_tracing_enabled,
 )
 from .online_base import OnlineEvalEnv, OnlineMemBaseDataset
 from ..model_types.dataset import (
@@ -342,81 +352,335 @@ class RealMem(OnlineMemBaseDataset):
             )
 
         # 1. Retrieve related memories before updating the memory layer.
-        retrieved_memories = layer.retrieve(
-            question, 
-            k=env.top_k, 
-            **env.retrieval_kwargs,
-        )
-        if len(retrieved_memories) == 0:
-            retrieved_memories = [
-                MemoryEntry(
-                    content="[NO RETRIEVED MEMORIES]",
-                    formatted_content="[NO RETRIEVED MEMORIES]",
-                    metadata={},
+        # The retrieval phase is wrapped in a dedicated memory search session that
+        # temporarily overrides the parent memory construction session established
+        # by the construction runner.
+        with comment_session(
+            category="memory_search",
+            comment=(
+                "Based on the provided question, we search the memory for it."
+            ),
+            metadata={
+                "top_k": env.top_k,
+                "retrieval_kwargs": env.retrieval_kwargs,
+            },
+        ):
+            # Register the task message content as a query variable. It simultaneously
+            # plays the role of a message (to be added later) and a query (used now for
+            # retrieval), which is why the category is set to "message & query".
+            comment_variable(
+                question,
+                variable_name="query",
+                id_strategy=lambda _: message.id,
+                category="message & query",
+                class_name="query",
+                comment=(
+                    "A task query which requires the memory system " 
+                    "to retrieve relevant memories."
+                ),
+                metadata=message.metadata,
+            )
+
+            retrieved_memories = layer.retrieve(
+                question, 
+                k=env.top_k, 
+                **env.retrieval_kwargs,
+            )
+            if len(retrieved_memories) == 0:
+                retrieved_memories = [
+                    MemoryEntry(
+                        content="[NO RETRIEVED MEMORIES]",
+                        formatted_content="[NO RETRIEVED MEMORIES]",
+                        metadata={
+                            "trace_id": "[NO RETRIEVED MEMORIES]",
+                        },
+                    )
+                ]
+
+            # Drop the runtime query handle.
+            tracing_ctx = current_context()
+            if tracing_ctx is not None and is_tracing_enabled():
+                tracing_ctx.remove_variable("query")
+
+            # See https://github.com/AvatarMemory/RealMemBench/blob/67afd0891d603adcc4458ff0449df306ef296b7a/eval/run_generation.py#L12. 
+            context_parts = []
+            for i, entry in enumerate(retrieved_memories, start=1):
+                text = entry.formatted_content or entry.content
+                context_parts.append(f"---- idx {i} ----\n{text}")
+            context = "\n\n".join(context_parts)
+
+        # 2-5. Generate answer, build rollout, and judge in a dedicated
+        # memory evaluation session.
+        with comment_session(
+            category="memory_evaluation",
+            comment=(
+                "Evaluate the memory layer by checking whether "
+                "the question-answering model can generate the correct answer "
+                "based on the retrieved memories." 
+            ),
+            metadata={
+                "qa_model": env.qa_model,
+                "judge_model": env.judge_model,
+                "qa_batch_size": 1,
+                "judge_batch_size": 1,
+                "generation_kwargs": env.generation_kwargs,
+            },
+        ):
+            # Register the question-answering prompt template as a runtime variable so that the graph
+            # records which prompt drives the question-answering model.
+            runtime_qa_template = comment_variable(
+                env.qa_operator.prompt.template,
+                to_runtime=True,
+                id_strategy=lambda _: "realmem-question-answering",
+                comment=(
+                    "The prompt template for the question-answering model. "
+                    "It is a `string.Template` object with `$question` and `$context` placeholders. "
+                    "It tells the question-answering model to generate an answer based on "
+                    "the question and the context retrieved from the memory system."
+                ),
+                category="prompt",
+                metadata={
+                    "op_type": "question-answering",
+                },
+            )
+
+            # 2. Generate answer via question-answering model.
+            qa_responses = env.qa_operator(
+                [question], 
+                [context],
+                batch_size=1,
+                aggregate=False,
+                **env.generation_kwargs,
+            )
+            generated = qa_responses[0].get("processed_content")
+
+            # A literal snippet describing how `context` is assembled from the
+            # retrieved memories. It is attached to the context-construction operation. 
+            context_builder_source = (
+                "context_parts = []\n"
+                "for i, entry in enumerate(retrieved_memories, start=1):\n"
+                "    text = entry.formatted_content or entry.content\n"
+                "    context_parts.append(f\"---- idx {i} ----\\n{text}\")\n"
+                "context = \"\\n\\n\".join(context_parts)\n"
+            )
+
+            with comment_op_scope(
+                op_name="question-answering",
+                category="evaluation",
+                comment=(
+                    "The question-answering model generates an answer based on "
+                    "the question, the context retrieved from the memory system, "
+                    "and a question-answering prompt."
+                ),
+            ):
+                input_memories = []
+                for memory in retrieved_memories:
+                    if is_tracing_enabled():
+                        assert "trace_id" in memory.metadata, (
+                            "The memory metadata must contain an 'trace_id' field. "
+                            "Please check the memory construction process."
+                        )
+                    input_memories.append(
+                        (
+                            # A very lightweight representation of the memory.
+                            {"id": memory.metadata.get("trace_id")},
+                            {
+                                "id_strategy": lambda v: v["id"],
+                                "identity_only": True,  # We don't need snapshot consistency check here.
+                            },
+                        )
+                    )
+
+                question_var = (
+                    question,
+                    {
+                        "class_name": "query",
+                        "id_strategy": lambda _: message.id,
+                    },
                 )
+                context_var = (
+                    context,
+                    {
+                        "class_name": "context",
+                        "category": "memory_context",
+                        "comment": "The formatted memory context.",
+                    },
+                )
+                pred_var = (
+                    generated,
+                    {
+                        "class_name": "prediction",
+                        "category": "llm_response",
+                        "comment": "The model's response to the question.",
+                    },
+                )
+
+                comment_op(
+                    inputs=input_memories,
+                    outputs=[context_var],
+                    metadata={
+                        "source_code": context_builder_source,
+                    },
+                    comment=(
+                        "The formatted context is constructed from the retrieved memories. "
+                        "Depending on the memory system implementation, the resulting context "
+                        "may include only selected portions of those memories rather than the "
+                        "full content of every retrieved memory."
+                    ),
+                    reuse_op=True,
+                )
+                comment_op(
+                    inputs=[question_var, context_var, runtime_qa_template],
+                    outputs=[pred_var],
+                    comment=(
+                        "The question-answering model generates an answer based on "
+                        "the question, the context retrieved from the memory system, "
+                        "and a question-answering prompt."
+                    ),
+                    reuse_op=True,
+                )
+
+            # 3. Build the rollout.
+            augmented_msg_dict = message.model_dump(mode="python")
+            augmented_msg_dict["metadata"]["original_message_content"] = question
+            augmented_msg_dict["metadata"]["retrieved_memories"] = [
+                entry.model_dump(mode="python") 
+                for entry in retrieved_memories
             ]
+            # It is the actual message content that the model sees.
+            augmented_content = env.qa_operator.prompt.substitute(
+                question=question, 
+                context=context,
+            )
+            augmented_msg_dict["content"] = augmented_content
+            augmented_msg = Message.model_validate(augmented_msg_dict)
 
-        # See https://github.com/AvatarMemory/RealMemBench/blob/67afd0891d603adcc4458ff0449df306ef296b7a/eval/run_generation.py#L12. 
-        context_parts = []
-        for i, entry in enumerate(retrieved_memories, start=1):
-            text = entry.formatted_content or entry.content
-            context_parts.append(f"---- idx {i} ----\n{text}")
-        context = "\n\n".join(context_parts)
+            # 4. Get the assistant's generated response.
+            response_msg = Message(
+                name="assistant",
+                role="assistant",
+                content=generated,
+                timestamp=message.timestamp,
+            )
 
-        # 2. Generate answer via question-answering model.
-        qa_responses = env.qa_operator(
-            [question], 
-            [context],
-            batch_size=1,
-            aggregate=False,
-            **env.generation_kwargs,
-        )
-        generated = qa_responses[0].get("processed_content")
+            rollout = [augmented_msg, response_msg]
 
-        # 3. Build the rollout.
-        augmented_msg_dict = message.model_dump(mode="python")
-        augmented_msg_dict["metadata"]["original_message_content"] = question
-        augmented_msg_dict["metadata"]["retrieved_memories"] = [
-            entry.model_dump(mode="python") 
-            for entry in retrieved_memories
-        ]
-        # It is the actual message content that the model sees.
-        augmented_content = env.qa_operator.prompt.substitute(
-            question=question, 
-            context=context,
-        )
-        augmented_msg_dict["content"] = augmented_content
-        augmented_msg = Message.model_validate(augmented_msg_dict)
+            # 5. Judge against golden answer.
+            golden_answer = message.metadata["ref_traj"]
+            metrics = {}
 
-        # 4. Get the assistant's generated response.
-        response_msg = Message(
-            name="assistant",
-            role="assistant",
-            content=generated,
-            timestamp=message.timestamp,
-        )
+            # Register the judge prompt template as a runtime variable.
+            runtime_judge_template = comment_variable(
+                env.judge_operator.prompt.template,
+                to_runtime=True,
+                id_strategy=lambda v: "realmem-lm-score",
+                comment=(
+                    "The prompt template for the judge model. "
+                    "It is a `string.Template` object with `$question`, `$prediction`, "
+                    "and `$golden_answers` placeholders. "
+                    "It tells the judge model to judge whether the model's prediction "
+                    "is correct or not based on a list of golden answers."
+                ),
+                category="prompt",
+                class_name="judge_prompt",
+                metadata={
+                    "op_type": "llm-judge",
+                },
+            )
 
-        rollout = [augmented_msg, response_msg]
+            judge_responses = env.judge_operator(
+                [question], 
+                [[golden_answer]], 
+                [generated],
+                batch_size=1,
+                aggregate=False,
+                **env.generation_kwargs,
+            )
+            raw_judge = judge_responses[0].get("processed_content")
+            metrics["llm_judge"] = MetricResult(
+                value=cls.parse_judge_response(raw_judge),
+                metadata={"judge_response": raw_judge},
+            )
 
-        # 5. Judge against golden answer.
-        golden_answer = message.metadata["ref_traj"]
-        metrics = {}
+            with comment_op_scope(
+                op_name="llm-judge",
+                category="evaluation",
+                comment=(
+                    "The judge model judges whether the model's prediction "
+                    "is correct or not based on a list of golden answers."
+                ),
+            ):
+                question_var = (
+                    question,
+                    {
+                        "class_name": "query",
+                        "id_strategy": lambda _: message.id,
+                    },
+                )
+                prediction_var = (
+                    generated,
+                    {
+                        "class_name": "prediction",
+                        "category": "llm_response",
+                        "comment": "The model's response to the question.",
+                    },
+                )
+                golden_answers_var = (
+                    [golden_answer],
+                    {
+                        "class_name": "golden_answers",
+                        "encoding_fn": lambda v: ", ".join(v),
+                        "category": "golden_answers",
+                        "comment": "The golden answers for the question.",
+                    },
+                )
+                judge_response_var = (
+                    raw_judge,
+                    {
+                        "class_name": "judge_response",
+                        "category": "llm_response",
+                        "comment": "The judge model's judgment.",
+                    },
+                )
 
-        judge_responses = env.judge_operator(
-            [question], 
-            [[golden_answer]], 
-            [generated],
-            batch_size=1,
-            aggregate=False,
-            **env.generation_kwargs,
-        )
-        raw_judge = judge_responses[0].get("processed_content")
-        metrics["llm_judge"] = MetricResult(
-            value=cls.parse_judge_response(raw_judge),
-            metadata={"judge_response": raw_judge},
-        )
+                comment_op(
+                    inputs=[
+                        question_var,
+                        golden_answers_var,
+                        runtime_judge_template,
+                        prediction_var,
+                    ],
+                    outputs=[judge_response_var],
+                    comment=(
+                        "The judge model gives its judgment "
+                        "based on the question, the golden answers, "
+                        "and the instruction."
+                    ),
+                    reuse_op=True,
+                )
+                comment_link(
+                    source=judge_response_var,
+                    target=(
+                        metrics["llm_judge"]["value"],
+                        {
+                            "class_name": "judge_score",
+                            "comment": "The judgement score.",
+                        },
+                    ),
+                    comment=(
+                        "Use a function to convert the judge model's response "
+                        "to a float score."
+                    ),
+                    edge_metadata={
+                        "source_code": inspect.getsource(cls.parse_judge_response),
+                    },
+                )
 
         # 6. Update the memory layer.
+        # This call happens outside the memory search and memory evaluation sessions,
+        # so the parent memory construction session is active again. The layer's
+        # own `add_message` instrumentation will register the message variable with
+        # category="message".
         layer.add_message(message)
 
         return [OnlineEvalResult(metrics=metrics, rollout=rollout)]

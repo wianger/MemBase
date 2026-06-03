@@ -27,7 +27,7 @@ if __name__ == "__main__":
         "--judge-model",
         type=str,
         default="gpt-4.1-mini",
-        help="Model name or path for judgment (exact match)."
+        help="Model name or path for judgment."
     )
     parser.add_argument(
         "--qa-batch-size",
@@ -86,6 +86,17 @@ if __name__ == "__main__":
         default=None,
         help="Metric names to compute.",
     )
+    parser.add_argument(
+        "--traced-data-save-dir",
+        type=str,
+        default="traced_data",
+        help="Directory where execution graph artefacts are saved.",
+    )
+    parser.add_argument(
+        "--tracing",
+        action="store_true",
+        help="Enable execution graph tracing.",
+    )
     args = parser.parse_args()
 
     context_builder = (
@@ -109,5 +120,7 @@ if __name__ == "__main__":
         prompt_template=prompt_template,
         add_question_timestamp=args.add_question_timestamp,
         metrics=args.metrics,
+        traced_data_save_dir=args.traced_data_save_dir,
+        tracing=args.tracing,
     )
     EvaluationRunner(runner_config).run()

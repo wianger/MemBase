@@ -124,6 +124,17 @@ if __name__ == "__main__":
         default=None,
         help="Path to a JSON config for the online evaluation environment.",
     )
+    parser.add_argument(
+        "--traced-data-save-dir",
+        type=str,
+        default="traced_data",
+        help="Directory where execution graph artefacts are saved.",
+    )
+    parser.add_argument(
+        "--tracing",
+        action="store_true",
+        help="Enable execution graph tracing.",
+    )
     args = parser.parse_args()
 
     message_preprocessor = None
@@ -154,5 +165,7 @@ if __name__ == "__main__":
         message_preprocessor=message_preprocessor,
         sample_filter=sample_filter,
         online_eval_config_path=args.online_eval_config_path,
+        traced_data_save_dir=args.traced_data_save_dir,
+        tracing=args.tracing,
     )
     ConstructionRunner(runner_config).run()

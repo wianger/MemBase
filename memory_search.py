@@ -82,6 +82,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Whether to raise an error if no memory is found for a user."
     )
+    parser.add_argument(
+        "--traced-data-save-dir",
+        type=str,
+        default="traced_data",
+        help="Directory where execution graph artefacts are saved."
+    )
+    parser.add_argument(
+        "--tracing",
+        action="store_true",
+        help="Enable execution graph tracing.",
+    )
     args = parser.parse_args()
 
     question_filter = None
@@ -100,5 +111,7 @@ if __name__ == "__main__":
         end_idx=args.end_idx,
         strict=args.strict,
         question_filter=question_filter,
+        traced_data_save_dir=args.traced_data_save_dir,
+        tracing=args.tracing,
     )
     SearchRunner(runner_config).run()

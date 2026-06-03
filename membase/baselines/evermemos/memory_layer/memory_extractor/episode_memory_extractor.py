@@ -6,9 +6,17 @@ from boundary detection results (BoundaryResult).
 """
 
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 import re, json, asyncio, uuid
+from smartcomment import (
+    current_context, 
+    is_tracing_enabled, 
+    comment_variable,
+    comment_op,
+    comment_link,
+)
 
 
 from memory_layer.prompts import get_prompt_by
@@ -286,11 +294,76 @@ class EpisodeMemoryExtractor(MemoryExtractor):
                 user_name = participants_name_map.get(user_id, user_id)
                 format_params["user_name"] = user_name
 
+        
+        runtime_memcell_result = None 
+        tracing_ctx = current_context()
+        if tracing_ctx is not None and is_tracing_enabled():
+            runtime_memcell_result = tracing_ctx.get_variable("memcell_result")
+
+        runtime_prompt = runtime_response = None 
+        runtime_prompt_template = comment_variable(
+            prompt_template,
+            to_runtime=True,
+            id_strategy=lambda _: "episode-extraction-prompt-template",
+            category="prompt",
+            comment=(
+                "A prompt template that asks the large language model to extract "
+                "an episode-level memory from the raw interaction data of the " 
+                "current initial memory-unit."
+            ),
+            metadata={
+                "op_type": "episode_extraction",
+                "mode": "group" if use_group_prompt else "personal",
+            },
+        )
+        runtime_custom_instructions = comment_variable(
+            self.default_custom_instructions,
+            to_runtime=True,
+            id_strategy=lambda _: "episode-extraction-custom-instructions",
+            category="prompt",
+            comment=(
+                "The custom instructions that constrain how the large language "
+                "model extracts the episode memory from the raw interaction data."
+            ),
+            metadata={
+                "op_type": "episode_extraction",
+            },
+        )
+
+        errors = []
         # Call LLM (with retry)
         data = None
         for i in range(5):
             try:
                 prompt = prompt_template.format(**format_params)
+
+                if runtime_prompt is None:
+                    runtime_prompt = comment_variable(
+                        prompt,
+                        to_runtime=True,
+                        class_name="episode_extraction_prompt",
+                        category="prompt",
+                        comment=(
+                            "A concrete episode-extraction prompt assembled from the initial "
+                            "memory-unit, the prompt template, and the default "
+                            "custom instructions."
+                        ),
+                    )
+                    comment_op(
+                        inputs=[
+                            runtime_memcell_result, 
+                            runtime_custom_instructions,
+                            runtime_prompt_template,
+                        ],
+                        outputs=[runtime_prompt],
+                        comment=(
+                            "The memory system assembles the concrete episode-extraction prompt "
+                            "from the initial memory-unit, the episode prompt template, "
+                            "and the custom instructions."
+                        ),
+                        reuse_op=True,
+                    )
+
                 response = await self.llm_provider.generate(prompt)
 
                 # Parse JSON
@@ -317,11 +390,58 @@ class EpisodeMemoryExtractor(MemoryExtractor):
                 if "content" not in data or not data["content"]:
                     raise ValueError("LLM response missing content field")
 
+                runtime_response = comment_variable(
+                    response,
+                    to_runtime=True,
+                    class_name="raw_episode_extraction_response",
+                    category="llm_response",
+                    comment=(
+                        "A raw episode-extraction response from the large language model."
+                    ),
+                )
+                comment_link(
+                    source=runtime_prompt,
+                    target=runtime_response,
+                    comment=(
+                        "The large language model generates an episode-level memory "
+                        "based on the concrete episode-extraction prompt."
+                    ),
+                )
+
                 # Validation passed, exit retry loop
                 break
             except Exception as e:
+                errors.append(
+                    f"Attempt {i + 1} fails because episode extraction raises "
+                    f"{e.__class__.__name__}: {e}."
+                )
                 logger.warning(f"Episode extraction retry {i+1}/5: {e}")
                 if i == 4:
+                    failed_marker = comment_variable(
+                        "FAILED",
+                        to_runtime=True,
+                        category="marker",
+                        class_name="failed_marker",
+                        comment=(
+                            "A marker indicating that the process fails."
+                        ),
+                    )
+                    comment_link(
+                        source=runtime_prompt,
+                        target=failed_marker,
+                        comment=(
+                            "The memory system fails to extract an episode-level memory " 
+                            "after five attempts."
+                        ),
+                        edge_metadata={
+                            "error": (
+                                "The memory system attempts episode extraction five times "
+                                "and fails to obtain a valid structured episode memory "
+                                "each time.\n\n"
+                                + "\n\n".join(errors)
+                            ),
+                        },
+                    )
                     raise Exception("Episode memory extraction failed after 5 retries")
                 continue
 
@@ -357,6 +477,65 @@ class EpisodeMemoryExtractor(MemoryExtractor):
         )
 
         logger.debug(f"✅ Episode extraction completed: subject='{title}'")
+
+        # The large language model successfully extracts the episode.
+        runtime_episode_memory_snapshot = comment_variable(
+            {
+                "subject": title,
+                "summary": summary,
+                "episode": content,
+            },
+            variable_name="episode_memory",
+            to_runtime=True,
+            class_name="episode_memory",
+            category="llm_response",
+            encoding_fn=partial(
+                json.dumps,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            decoding_fn=json.loads,
+            comment=(
+                "A structured episode-memory parsed from the large language "
+                "model's response."
+            ),
+        )
+
+
+        # For ease of understanding, the source code here differs slightly from the actual implementation.
+        comment_link(
+            source=runtime_response,
+            target=runtime_episode_memory_snapshot,
+            comment=(
+                "The memory system parses the raw episode-extraction response into "
+                "a structured episode-memory."
+            ),
+            edge_metadata={
+                "source_code": (
+                    "if '```json' in response:\n"
+                    "    start = response.find('```json') + 7\n"
+                    "    end = response.find('```', start)\n"
+                    "    if end > start:\n"
+                    "        json_str = response[start:end].strip()\n"
+                    "        data = json.loads(json_str)\n"
+                    "    else:\n"
+                    "        data = json.loads(response)\n"
+                    "else:\n"
+                    "    json_match = re.search(r'\\{[^{}]*\"title\"[^{}]*\"content\"[^{}]*\\}', response, re.DOTALL)\n"
+                    "    if json_match:\n"
+                    "        data = json.loads(json_match.group())\n"
+                    "    else:\n"
+                    "        data = json.loads(response)\n"
+                    "if 'summary' not in data or not data['summary']:\n"
+                    "    data['summary'] = data['content'][:200]\n"
+                    "subject = data['title']\n"
+                    "content = data['content']\n"
+                    "summary = data['summary']"
+                ),
+            },
+        )
+
         return episode_memory
 
     async def extract_memory(self, request: MemoryExtractRequest) -> Optional[EpisodeMemory]:

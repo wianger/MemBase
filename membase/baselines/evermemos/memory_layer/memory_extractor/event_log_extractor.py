@@ -7,8 +7,17 @@ Each event log contains a time and a list of atomic facts extracted from the epi
 
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
+from functools import partial
 import json
 import re
+import inspect
+from smartcomment import (
+    comment_link, 
+    comment_op, 
+    comment_variable, 
+    current_context,
+    is_tracing_enabled, 
+)
 
 from memory_layer.prompts import get_prompt_by
 from memory_layer.llm.llm_provider import LLMProvider
@@ -210,6 +219,59 @@ class EventLogExtractor:
         prompt = self.event_log_prompt.replace("{{INPUT_TEXT}}", input_text)
         prompt = prompt.replace("{{TIME}}", time_str)
 
+        runtime_prompt = runtime_memcell_result = None 
+        tracing_ctx = current_context()
+        if tracing_ctx is not None and is_tracing_enabled():
+            runtime_memcell_result = tracing_ctx.get_variable("memcell_result")
+
+            candidates = tracing_ctx.query_variables(name_pattern="event_extraction_prompt")
+            assert len(candidates) <= 1, (
+                "Multiple event extraction prompts are found in the tracing context."
+            )
+
+            if candidates:
+                runtime_prompt = candidates[0]
+            else:
+                runtime_prompt = comment_variable(
+                    prompt,
+                    variable_name="event_extraction_prompt",
+                    to_runtime=True,
+                    class_name="event_extraction_prompt",
+                    category="prompt",
+                    comment=(
+                        "A concrete event-log-extraction prompt assembled from the "
+                        "refined memory-unit and the event-log prompt template."
+                    ),
+                )
+
+            comment_op(
+                inputs=[
+                    runtime_memcell_result,
+                    (
+                        self.event_log_prompt,
+                        {
+                            "id_strategy": lambda _: "event-log-prompt-template",
+                            "category": "prompt",
+                            "comment": (
+                                "A prompt template that asks the large language model "
+                                "to extract a retrieval-oriented event log from the "
+                                "current refined memory-unit."
+                            ),
+                            "metadata": {
+                                "op_type": "event_log_extraction",
+                            },
+                        }
+                    ),
+                ],
+                outputs=[runtime_prompt],
+                comment=(
+                    "The memory system assembles the concrete event-log-extraction "
+                    "prompt from the refined memory-unit and the event-log prompt "
+                    "template."
+                ),
+                reuse_op=True,
+            )
+
         # 3. Call LLM to generate event log
         response = await self.llm_provider.generate(prompt)
 
@@ -264,6 +326,57 @@ class EventLogExtractor:
             fact_embeddings=fact_embeddings,
         )
 
+
+        event_log_snapshot = {
+            "atomic_fact": event_log.atomic_fact,
+        } 
+        runtime_response = comment_variable(
+            response,
+            to_runtime=True,
+            class_name="raw_event_log_extraction_response",
+            category="llm_response",
+            comment=(
+                "A raw event-log-extraction response from the large language model."
+            ),
+        )
+        runtime_event_log_snapshot = comment_variable(
+            event_log_snapshot,
+            variable_name="event_log",
+            to_runtime=True,
+            class_name="event_log",
+            category="llm_response",
+            encoding_fn=partial(
+                json.dumps,
+                ensure_ascii=False,
+                indent=4,
+                sort_keys=True,
+            ),
+            decoding_fn=json.loads,
+            comment=(
+                "A structured event-log parsed from the large language "
+                "model's response."
+            ),
+        )
+        comment_link(
+            source=runtime_prompt,
+            target=runtime_response,
+            comment=(
+                "The large language model generates a retrieval-oriented event "
+                "log based on the concrete event-log-extraction prompt."
+            ),
+        )
+        comment_link(
+            source=runtime_response,
+            target=runtime_event_log_snapshot,
+            comment=(
+                "The memory system parses the raw event-log-extraction response "
+                "into a structured event-log."
+            ),
+            edge_metadata={
+                "source_code": inspect.getsource(self._parse_llm_response),
+            },
+        )
+
         logger.debug(
             f"✅ Successfully extracted event log, containing {len(event_log.atomic_fact)} atomic facts (embeddings generated)"
         )
@@ -293,6 +406,8 @@ class EventLogExtractor:
         #    input_text = memcell.episode
         #    timestamp = memcell.timestamp
 
+        errors = [] 
+
         for retry in range(5):
             try:
                 return await self._extract_event_log(
@@ -304,8 +419,45 @@ class EventLogExtractor:
                 )
             except Exception as e:
                 logger.warning(f"Retrying to extract event log {retry+1}/5: {e}")
+                errors.append(
+                    f"Attempt {retry + 1} fails because event log extraction raises " 
+                    f"{e.__class__.__name__}: {e}."
+                )
                 if retry == 4:
                     logger.error(f"Failed to extract event log after 5 retries")
+
+                    runtime_prompt = None
+                    tracing_ctx = current_context()
+                    if tracing_ctx is not None and is_tracing_enabled():
+                        runtime_prompt = tracing_ctx.get_variable("event_extraction_prompt")
+
+                    failed_marker = comment_variable(
+                        "FAILED",
+                        to_runtime=True,
+                        category="marker",
+                        class_name="failed_marker",
+                        comment=(
+                            "A marker indicating that the process fails."
+                        ),
+                    )
+                    if runtime_prompt is not None:
+                        comment_link(
+                            source=runtime_prompt,
+                            target=failed_marker,
+                            comment=(
+                                "The memory system fails to extract an event-log "
+                                "after five attempts."
+                            ),
+                            edge_metadata={
+                                "error": (
+                                    "The memory system attempts event-log extraction five "
+                                    "times and fails to obtain a valid structured event-log "
+                                    "each time.\n\n"
+                                    + "\n\n".join(errors)
+                                ),
+                            },
+                        )
+
                     raise Exception(f"Failed to extract event log: {e}")
                 continue
 

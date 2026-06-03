@@ -12,6 +12,7 @@ _MAPPING_NAMES = OrderedDict[str, str](
         ("EverMemOS", "EverMemOSConfig"),
         ("HippoRAG2", "HippoRAGConfig"),
         ("Mem0", "Mem0Config"),
+        ("TracedMem0", "Mem0Config"),
     ]
 )
 
@@ -25,6 +26,7 @@ _MODULE_MAPPING = OrderedDict[str, str](
         ("EverMemOS", "evermemos"),
         ("HippoRAG2", "hipporag"),
         ("Mem0", "mem0"),
+        ("TracedMem0", "mem0"),
     ]
 )
 
