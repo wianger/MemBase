@@ -148,21 +148,24 @@ class Mem0Layer(MemBaseLayer):
                 )
                 new_messages.append(msg_dict)
             
-            self.memory_layer.add(
-                messages=new_messages,
-                user_id=self.config.user_id,
-                metadata={
-                    "timestamp": f"[{messages[0].timestamp}, {messages[-1].timestamp}]",
-                    "speakers": ", ".join(
-                        sorted(
-                            set(
-                                [message.name for message in messages]
+            try:
+                self.memory_layer.add(
+                    messages=new_messages,
+                    user_id=self.config.user_id,
+                    metadata={
+                        "timestamp": f"[{messages[0].timestamp}, {messages[-1].timestamp}]",
+                        "speakers": ", ".join(
+                            sorted(
+                                set(
+                                    [message.name for message in messages]
+                                )
                             )
-                        )
-                    ),
-                },
-                **kwargs, 
-            )
+                        ),
+                    },
+                    **kwargs,
+                )
+            except Exception as e:
+                print(f"Error in add_messages method in Mem0Layer: \n\t{e.__class__.__name__}: {e}")
 
     def retrieve(self, query: str, k: int = 10, **kwargs: Any) -> list[MemoryEntry]:
         result = self.memory_layer.search(

@@ -40,11 +40,15 @@ class EverMemOSLayer(MemBaseLayer):
             "name": message.name,
             "content": message.content,
         }
-        self.memory_layer.add_message(
-            message_dict, 
-            timestamp=message.timestamp,
-            **kwargs,
-        )
+        
+        try:
+            self.memory_layer.add_message(
+                message_dict,
+                timestamp=message.timestamp,
+                **kwargs,
+            )
+        except Exception as e:
+            print(f"Error in add_message method in EverMemOSLayer: \n\t{e.__class__.__name__}: {e}")
     
     def add_messages(self, messages: list[Message], **kwargs: Any) -> None:
         for message in messages:
