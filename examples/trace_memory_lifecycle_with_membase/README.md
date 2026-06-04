@@ -160,7 +160,11 @@ The evaluation graph imports and extends the user's search graph, tracing how re
 
 
 > [!NOTE]
-> If you also want to evaluate memory-system performance, we recommend setting the `context_window` in `long_context_config.json` to `200000`, since recent long-context models commonly support much larger context windows. For `EverMemOS`, use the reranker server command below for performance-sensitive runs:
+> This example focuses on tracing the memory lifecycle and reproducing the execution-graph data generation used in the MemTrace paper. If you also use these scripts for memory-system performance evaluation, please note the following protocol details.
+>
+> For `Long-Context`, we recommend setting `context_window` in `long_context_config.json` to `200000`, since recent long-context models commonly support much larger context windows.
+>
+> For `EverMemOS`, use the corrected reranker deployment command below for performance-sensitive runs:
 >
 > ```bash
 > CUDA_VISIBLE_DEVICES=0 vllm serve pretrained_models/Qwen3-Reranker-4B \
@@ -170,5 +174,5 @@ The evaluation graph imports and extends the user's search graph, tracing how re
 >     --hf_overrides '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
 > ```
 >
-> This example is mainly for tracing memory lifecycles and reproducing the execution-graph data generation used by MemTraceBench. The settings above are especially important when you use the same scripts for performance evaluation.
+> For `LoCoMo`, we treat it as a multi-user conversation dataset. Both speakers are represented as users, and one shared memory layer is maintained for the whole trajectory. This differs from some prior LoCoMo evaluation setups that convert the data into human-assistant dialogues or maintain separate memories per speaker. Because of this protocol difference, performance numbers may not be directly comparable to those reported by such scripts.
 
