@@ -14,7 +14,7 @@ Different memory systems have different dependencies. Use a separate Python envi
 conda create -n membase_mem0 python=3.12 -y
 conda activate membase_mem0
 pip install -r envs/mem0_requirements.txt
-pip install vllm
+pip install "vllm<=0.11.1"
 pip install nltk
 ```
 
@@ -34,7 +34,7 @@ conda create -n membase_mem0 python=3.12 -y
 conda activate membase_mem0
 pip install uv
 uv pip install -r envs/mem0_requirements.txt
-uv pip install vllm
+uv pip install "vllm<=0.11.1"
 uv pip install nltk
 ```
 
