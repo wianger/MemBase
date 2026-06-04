@@ -158,3 +158,17 @@ The evaluation graph imports and extends the user's search graph, tracing how re
 > [!TIP] 
 > You can adjust `qa_model` for question answering and `judge_model` for LLM-as-a-Judge evaluation in `run_traced_evaluation.sh`. You can also tune `qa_batch_size` and `judge_batch_size` based on your API limits. Make sure `top_k` matches the value used in `run_traced_search.sh`, and set `end_idx` according to the `sample_size` used in `run_traced_construction.sh`. To reproduce the execution-graph data generation in the MemTrace paper, use GPT-4.1 mini as the question-answering model and Claude Opus 4.5 as the judge model. For `RealMem`, memory evaluation is completed during memory construction, and its question-answering model, judge model, API config path can be adjusted in `realmem_eval_config.json`.
 
+
+> [!NOTE]
+> If you also want to evaluate memory-system performance, we recommend setting the `context_window` in `long_context_config.json` to `200000`, since recent long-context models commonly support much larger context windows. For `EverMemOS`, use the reranker server command below for performance-sensitive runs:
+>
+> ```bash
+> CUDA_VISIBLE_DEVICES=0 vllm serve pretrained_models/Qwen3-Reranker-4B \
+>     --port 8001 \
+>     --served-model-name Qwen3-Reranker-4B \
+>     --gpu-memory-utilization 0.4 \
+>     --hf_overrides '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
+> ```
+>
+> This example is mainly for tracing memory lifecycles and reproducing the execution-graph data generation used by MemTraceBench. The settings above are especially important when you use the same scripts for performance evaluation.
+
