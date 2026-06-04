@@ -83,11 +83,13 @@ if __name__ == "__main__":
         help="Whether to raise an error if no memory is found for a user."
     )
     parser.add_argument(
-        "--traced-data-save-dir",
-        type=str,
-        default="traced_data",
-        help="Directory where execution graph artefacts are saved."
-    )
+    "--no-strict",
+    action="store_true",
+    help=(
+        "Disable strict mode. When set, missing memories for a user are "
+        "skipped instead of raising an error."
+    ),
+)
     parser.add_argument(
         "--tracing",
         action="store_true",
@@ -109,7 +111,7 @@ if __name__ == "__main__":
         top_k=args.top_k,
         start_idx=args.start_idx,
         end_idx=args.end_idx,
-        strict=args.strict,
+        strict=not args.no_strict,
         question_filter=question_filter,
         traced_data_save_dir=args.traced_data_save_dir,
         tracing=args.tracing,
