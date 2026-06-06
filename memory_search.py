@@ -78,18 +78,19 @@ if __name__ == "__main__":
         help="The ending index of the trajectories to be processed."
     )
     parser.add_argument(
-        "--strict",
+        "--no-strict",
         action="store_true",
-        help="Whether to raise an error if no memory is found for a user."
+        help=(
+            "Disable strict mode. When set, missing memories for a user are "
+            "skipped instead of raising an error."
+        ),
     )
     parser.add_argument(
-    "--no-strict",
-    action="store_true",
-    help=(
-        "Disable strict mode. When set, missing memories for a user are "
-        "skipped instead of raising an error."
-    ),
-)
+        "--traced-data-save-dir",
+        type=str,
+        default="traced_data",
+        help="Directory where execution graph artefacts are saved."
+    )
     parser.add_argument(
         "--tracing",
         action="store_true",
