@@ -1397,7 +1397,7 @@ class OnlineRetriever:
                     ),
                 )
                 comment_link(
-                    source=all_runtime_round2_results[0],
+                    source=all_runtime_round2_results[0] if all_runtime_round2_results else all_runtime_round2_results,
                     target=runtime_round2_results,
                     comment=(
                         "Because there is only one Round-2 retrieval branch, "
